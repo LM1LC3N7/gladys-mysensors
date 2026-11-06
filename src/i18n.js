@@ -175,6 +175,10 @@ export const T = {
       `Turned on again at the node after an off (reported twice): the off is not sent again (${list})`,
       `Rallumé sur place après un arrêt (signalé deux fois) : l’arrêt n’est pas renvoyé (${list})`,
     ),
+  unasked: both(
+    'The gateway answers requests Gladys did not make (another controller?): an off counts as sent only by the echo of the node',
+    'La passerelle répond à des demandes que Gladys n’a pas faites (un autre contrôleur ?) : un arrêt ne compte comme envoyé que par l’écho du nœud',
+  ),
   invalidSafe: (list) =>
     both(
       `Entries ignored in "Relays and dimmers declared safe": ${list}`,

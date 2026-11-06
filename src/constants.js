@@ -176,6 +176,12 @@ export const TIMINGS = {
   keepalive: MINUTE,
   /** TCP: nothing received for this long closes the session. */
   silence: 150 * SECOND,
+  /** A version ask without answer this long is taken as lost. */
+  askLife: 10 * SECOND,
+  /** After a version answer nobody asked for, answers prove no send for this long. */
+  unaskedQuiet: MINUTE,
+  /** The note "turned on again at the node" stays this long at most. */
+  overriddenNote: 10 * MINUTE,
   /** The echo of a command awaited this long (Gladys gives up at 5 s). */
   echo: 3500,
   /** A stop not echoed is sent again within the click, after this. */

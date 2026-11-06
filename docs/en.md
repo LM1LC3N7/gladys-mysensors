@@ -82,7 +82,11 @@ Turning off a relay or a light (or a brightness of 0) is never refused for a
 declaration, an option or a configuration not read yet, and never waits for
 the disk. It is written at once when the gateway is connected, followed by a
 request for the version of the gateway: a send counts only once the gateway
-answers that request on the same connection (it read the off before it) or
+answers that request, or a later one, on the same connection (each answer
+is matched to the oldest request still waiting there; an answer nobody
+asked for, or a request left 10 s without answer, proves nothing; for a
+minute after an answer nobody asked for, as when another controller talks to
+the same gateway, only the echo of the node counts) (it read the off before it) or
 the node echoes the off. Otherwise Gladys connects at once, and it leaves
 first; a click during a connection attempt that fails tries once more at
 once.
@@ -98,9 +102,13 @@ It is kept on disk until the node confirms it (echo, or a report of off after
 the send), and sent again after a restart, even before the configuration is
 read (Ethernet gateway, or MQTT broker without credentials). It is lifted
 without being sent again when a newer command of the same target actually
-left, or when the node reports itself on twice after the off left (someone
-turned it on again at the node: a single report may have crossed the off, it
-does not count); the status then says so.
+left, or when the node, last reported off before the click, reports itself
+on twice after the off left (someone turned it on again at the node: a
+single report may have crossed the off, and the on/off + level pair of a
+dimmer is one report); the status then says so until the next report of the
+target (10 minutes at most). When the node was on, or its state unknown,
+before the click, a report of on is not a change made elsewhere: the off is
+sent again, then abandoned.
 
 It cannot leave while the gateway (or the broker) is unreachable, while the
 broker refuses the credentials, or while the configuration is not valid: it

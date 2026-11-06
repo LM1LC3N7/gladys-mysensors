@@ -92,8 +92,12 @@ passerelle n'est pas connectée.
 refusé pour une déclaration, une option ou une configuration pas encore lue,
 et n'attend jamais le disque. L'arrêt est écrit tout de suite si la
 passerelle est connectée, suivi d'une demande de version de la passerelle :
-un envoi ne compte qu'une fois que la passerelle a répondu à cette demande
-sur la même connexion (elle a lu l'arrêt avant) ou que le nœud a renvoyé
+un envoi ne compte qu'une fois que la passerelle a répondu à cette demande,
+ou à une suivante, sur la même connexion (chaque réponse va à la plus
+ancienne demande encore en attente ; une réponse que personne n'a demandée,
+ou une demande restée 10 s sans réponse, ne prouve rien ; pendant la minute
+qui suit une réponse que personne n'a demandée, comme quand un autre
+contrôleur parle à la même passerelle, seul l'écho du nœud compte) (elle a lu l'arrêt avant) ou que le nœud a renvoyé
 l'arrêt en écho. Sinon Gladys se connecte aussitôt, et il part en premier ;
 un clic pendant une tentative de connexion qui échoue relance un essai
 aussitôt.
@@ -109,9 +113,14 @@ Il est gardé sur le disque jusqu'à ce que le nœud le confirme (écho, ou éta
 éteint signalé après l'envoi), et renvoyé après un redémarrage, même avant la
 lecture de la configuration (passerelle Ethernet, ou broker MQTT sans
 identifiants). Il est levé sans être renvoyé quand une commande plus récente
-de la même cible est réellement partie, ou quand le nœud se signale allumé
-deux fois après le départ de l'arrêt (quelqu'un l'a rallumé sur place : un
-seul état a pu croiser l'arrêt, il ne compte pas) ; le statut le dit alors.
+de la même cible est réellement partie, ou quand le nœud, signalé éteint
+avant le clic, se signale allumé deux fois après le départ de l'arrêt
+(quelqu'un l'a rallumé sur place : un seul état a pu croiser l'arrêt, et la
+paire marche/niveau d'un variateur compte pour un état) ; le statut le dit
+alors jusqu'au prochain état signalé de la cible (10 minutes au plus).
+Quand le nœud était allumé, ou son état inconnu, avant le clic, un état
+allumé n'est pas un changement fait ailleurs : l'arrêt est renvoyé, puis
+abandonné.
 
 Il ne peut pas partir tant que la passerelle (ou le broker) est injoignable,
 que le broker refuse les identifiants ou que la configuration n'est pas

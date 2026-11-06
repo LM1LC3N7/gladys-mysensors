@@ -76,8 +76,17 @@ sockets.
   is down follows the waits of the link (no connection without a click).
   Confirmed by an echo or a report of 0 after it left. Lifted, never sent
   again, by a newer command of the target that actually left, or by two
-  reports of the node showing it on after it left (review r1, I1: someone
-  turned it on again at the node; one report may cross the send). Kept in
+  reports of the node showing it on after it left, only when its last report
+  before the click was off (review r1 I1, r2 B1: on or unknown before is not
+  a change made elsewhere; one V_STATUS report per change, the V_PERCENTAGE
+  of a dimmer not counted). The note stays until the next report of the
+  target, 10 min at most. A send is proven by the answer to a version ask
+  written after it: asks queued per link, each answer matched to the oldest
+  one waiting, asks older than 10 s forgotten, unasked answers ignored and, for a
+  minute after one, no answer proves a send (only an echo; status note):
+  another controller of the gateway or a forged answer could otherwise pop
+  an ask of Gladys; the proofs of the 10 s before such an answer are
+  withdrawn (review r2 I1). Kept in
   /data (route, node, child, proven count; an unreadable count is 0; no age
   limit); sent again after a restart before getConfig() through the route of
   /data (TCP, or MQTT without credentials: no secret in /data).
@@ -117,8 +126,9 @@ sockets.
   with credentials left unanswered twice in a row): no try before 15 min,
   1 h, 6 h, then 24 h; persisted in /data with a salted 6-bit mark of the
   refused pair (never the password, never a usable hash). After a restart
-  the wait goes on only if the mark matches (a new password colliding with
-  the mark, 1 in 64, waits for the next spaced try). Saving the
+  one try at once (a password changed meanwhile is always tried, review r2
+  I2); if refused again, the count goes on when the mark matches (a longer
+  wait), else starts over. Saving the
   configuration or the test button always tries at once. A broker answering
   1 or 132 is used in MQTT 3.1.1 (status).
 - **getConfig()** failing in `connected`: tried again after 5 s, 15 s, then

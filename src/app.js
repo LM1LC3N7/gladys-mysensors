@@ -89,6 +89,10 @@ const newStop = (node, child, sends) => ({
   writtenOn: undefined,
   proofAt: 0,
   onReports: 0,
+  /** When its last sends were proven (withdrawn if an unasked answer follows). */
+  provenAt: [],
+  /** The last report of the target before the click: '0', '1' or undefined. */
+  departure: undefined,
   abandoned: sends >= STOP_SENDS,
   timer: undefined,
   waiters: [],
@@ -185,15 +189,18 @@ export class MySensorsApp {
     this.lastScanAt = -Infinity;
     this.lastDiscoverAt = -Infinity;
     /** "node:child" of the stops lifted by the node turned on again in place. */
-    this.overridden = new Set();
+    this.overridden = new Map();
     this.urgentAfterAttempt = false;
-    this.asked = 0;
+    this.askSeq = 0;
+    this.asks = [];
+    this.unaskedAt = undefined;
+    this.unaskedCount = 0;
     this.answered = 0;
     this.scanTimers = new Set();
   }
 
   resetSession() {
-    this.asked = 0;
+    this.asks = [];
     this.answered = 0;
     this.live = false;
     this.version = undefined;
@@ -293,14 +300,17 @@ export class MySensorsApp {
     this.config = next;
     if (fromUser) {
       this.liftAuth();
-    } else if (this.memory.auth.failures > 0) {
-      // A restart: the spaced tries go on only if the refused pair is still the one configured.
+    } else if (this.memory.auth.failures > 0 && !previous) {
+      // A restart: one try at once (a password changed meanwhile is always
+      // tried); the count of refusals goes on only if the refused pair is
+      // still the one configured (then a new refusal waits longer).
       const same =
         next.transport === TRANSPORTS.MQTT &&
         this.memory.auth.salt &&
         this.memory.auth.mark ===
           credentialsMark(this.memory.auth.salt, next.username, next.password);
-      if (!same) this.liftAuth();
+      if (same) this.tryAuthOnce();
+      else this.liftAuth();
     }
     const route = routeOf(next);
     if (JSON.stringify(route) !== JSON.stringify(this.memory.route)) {
@@ -697,6 +707,13 @@ export class MySensorsApp {
     );
   }
 
+  /** One try now, the count of refusals kept (after a restart). */
+  tryAuthOnce() {
+    if (this.authTimer) this.timers.clearTimeout(this.authTimer);
+    this.authTimer = undefined;
+    this.authUntil = undefined;
+  }
+
   /** New credentials, the test button or an accepted connection: the next try is now. */
   liftAuth() {
     if (this.authTimer) this.timers.clearTimeout(this.authTimer);
@@ -842,7 +859,8 @@ export class MySensorsApp {
     const info = this.nodeInfo(msg.node);
     if (msg.child === NODE_CHILD) return;
     const key = `${msg.child}:${msg.sub}`;
-    if (info.values.has(key) || info.values.size < LIMITS.childrenPerNode * 4) {
+    // Only the reports of the node (ack 0) are its state; an echo is not.
+    if (msg.ack === 0 && (info.values.has(key) || info.values.size < LIMITS.childrenPerNode * 4)) {
       const known = info.values.has(key);
       info.values.set(key, {
         child: msg.child,
@@ -852,12 +870,11 @@ export class MySensorsApp {
       });
       if (!known && !info.children.has(msg.child)) this.scheduleDevices();
     }
+    // The note "turned on again at the node" goes with the next report of the target.
+    if (msg.ack === 0 && msg.sub === V.STATUS) this.overridden.delete(`${msg.node}:${msg.child}`);
     if (msg.sub === V.STATUS && msg.payload === '0') this.stopSeen(msg.node, msg.child);
-    else if (
-      msg.ack === 0 &&
-      ((msg.sub === V.STATUS && msg.payload === '1') ||
-        (msg.sub === V.PERCENTAGE && /^[1-9]\d{0,2}$/.test(msg.payload)))
-    ) {
+    else if (msg.ack === 0 && msg.sub === V.STATUS && msg.payload === '1') {
+      // V_STATUS only: the V_STATUS + V_PERCENTAGE pair of one change is one reading.
       this.stopContradicted(msg.node, msg.child);
     }
     // An echo (ack 1) proves the node received a command, not that it applied
@@ -874,8 +891,7 @@ export class MySensorsApp {
       case I.VERSION:
         if (msg.node === GATEWAY_NODE) {
           this.version = cleanText(msg.payload);
-          this.answered += 1;
-          this.proveStops();
+          this.versionAnswered();
           for (const w of this.versionWaiters.splice(0)) w.resolve(true);
           this.updateStatus().catch(() => {});
           // An answer (asked by the test button too) counts: the next ask a full minute later.
@@ -1313,9 +1329,12 @@ export class MySensorsApp {
     }
     // A new click: the whole budget again.
     stop.sends = 0;
+    stop.provenAt = [];
     stop.writes = 0;
     stop.onReports = 0;
     stop.abandoned = false;
+    // The state before the click: the last report of the node (unknown if none).
+    stop.departure = this.nodes.get(node)?.values.get(`${child}:${V.STATUS}`)?.payload;
     this.overridden.delete(key);
     if (stop.timer) this.timers.clearTimeout(stop.timer);
     stop.timer = undefined;
@@ -1340,7 +1359,11 @@ export class MySensorsApp {
       sub: I.VERSION,
       payload: '',
     });
-    if (sent) this.asked += 1;
+    if (sent) {
+      this.askSeq += 1;
+      if (this.asks.length >= 50) this.asks.shift();
+      this.asks.push({ seq: this.askSeq, at: this.monotonic() });
+    }
     return sent;
   }
 
@@ -1373,7 +1396,7 @@ export class MySensorsApp {
     }
     stop.writes += 1;
     stop.writtenOn = this.link;
-    stop.proofAt = this.asked + 1;
+    stop.proofAt = this.askSeq + 1;
     if (ask) this.askVersion();
     const wait = STOP_WAITS[Math.min(stop.writes - 1, STOP_WAITS.length - 1)];
     stop.timer = this.timers.setTimeout(() => this.stopDue(stop), wait);
@@ -1409,14 +1432,56 @@ export class MySensorsApp {
     return written;
   }
 
-  /** The gateway answered an ask: the stops written before it on this link were read. */
-  proveStops() {
+  /**
+   * A version answer of the gateway: it answers the oldest ask still waiting
+   * on this link (asks older than TIMINGS.askLife are forgotten: lost); an
+   * answer nobody asked for proves nothing.
+   */
+  versionAnswered() {
+    const now = this.monotonic();
+    while (this.asks.length > 0 && now - this.asks[0].at > TIMINGS.askLife) this.asks.shift();
+    const ask = this.asks.shift();
+    if (!ask) {
+      // Nobody asked: another controller of the gateway, or a forged message.
+      // While such answers come, no answer proves a send (only an echo does).
+      this.unaskedAt = now;
+      this.unaskedCount += 1;
+      this.lastStatus = undefined;
+      this.revokeRecentProofs(now);
+      return;
+    }
+    this.answered += 1;
+    if (this.unaskedAt !== undefined && now - this.unaskedAt < TIMINGS.unaskedQuiet) return;
+    this.proveStops(ask.seq);
+  }
+
+  /**
+   * An answer nobody asked for came: the proofs of the last seconds may have
+   * come from such answers (one may have taken the place of an answer of
+   * Gladys): they are withdrawn, never counted.
+   */
+  revokeRecentProofs(now) {
+    let revoked = false;
+    for (const stop of this.stops.values()) {
+      const recent = stop.provenAt.filter((at) => now - at < TIMINGS.askLife);
+      if (recent.length === 0) continue;
+      stop.provenAt = stop.provenAt.filter((at) => now - at >= TIMINGS.askLife);
+      stop.sends = Math.max(0, stop.sends - recent.length);
+      revoked = true;
+    }
+    if (revoked) this.saveLater();
+  }
+
+  /** The gateway answered the ask `seq`: the stops written before it on this link were read. */
+  proveStops(seq) {
     let proven = false;
     for (const stop of this.stops.values()) {
-      if (stop.writtenOn && stop.writtenOn === this.link && stop.proofAt <= this.answered) {
+      if (stop.writtenOn && stop.writtenOn === this.link && stop.proofAt <= seq) {
         stop.writtenOn = undefined;
         stop.sends += 1;
         stop.sentHere = true;
+        stop.provenAt.push(this.monotonic());
+        if (stop.provenAt.length > STOP_SENDS) stop.provenAt.shift();
         proven = true;
       }
     }
@@ -1441,18 +1506,20 @@ export class MySensorsApp {
   }
 
   /**
-   * The node reported itself on (its own button, a local rule) after the stop
-   * left: twice in a row, the stop is lifted and never sent again over it (a
-   * single report may have crossed the send).
+   * The node reported itself on after the stop left. Only when it was known
+   * off before the click is that a change made elsewhere (its own button):
+   * read twice (one report may have crossed the send), the stop is lifted and
+   * never sent again over it. On or unknown before: not a change, the stop
+   * goes on (sent again, then abandoned with the status).
    */
   stopContradicted(node, child) {
     const key = `${node}:${child}`;
     const stop = this.stops.get(key);
-    if (!stop || !this.stopLeft(stop)) return;
+    if (!stop || !this.stopLeft(stop) || stop.departure !== '0') return;
     stop.onReports += 1;
     if (stop.onReports < 2) return;
     if (this.overridden.size >= 20) this.overridden.clear();
-    this.overridden.add(key);
+    this.overridden.set(key, this.monotonic());
     this.endStop(key, 'overridden');
   }
 
@@ -1527,7 +1594,16 @@ export class MySensorsApp {
     if (waiting.length) notes.push(T.stopsWaiting(targetList(waiting)));
     if (unconfirmed.length) notes.push(T.stopsUnconfirmed(targetList(unconfirmed)));
     if (abandoned.length) notes.push(T.stopsAbandoned(targetList(abandoned)));
-    if (this.overridden.size) notes.push(T.stopsOverridden(targetList([...this.overridden])));
+    // Until the next report of the target, or 10 min.
+    for (const [key, at] of this.overridden) {
+      if (this.monotonic() - at > TIMINGS.overriddenNote) this.overridden.delete(key);
+    }
+    if (this.unaskedAt !== undefined && this.monotonic() - this.unaskedAt < TIMINGS.unaskedQuiet) {
+      notes.push(T.unasked);
+    }
+    if (this.overridden.size) {
+      notes.push(T.stopsOverridden(targetList([...this.overridden.keys()])));
+    }
     if (this.config?.invalidSafe.length)
       notes.push(T.invalidSafe(this.config.invalidSafe.join(', ')));
     if (this.idNote) notes.push(this.idNote);

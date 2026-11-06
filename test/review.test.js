@@ -176,6 +176,9 @@ test('B2: restart with an off in /data, a slow first attempt, getConfig() meanwh
 test('I1: the node turned on again in place (reported twice) lifts the off; once does not', async (t) => {
   const ctx = await setup(t, { gateway: { echo: false } });
   await live(ctx);
+  // Known off before the click (r2 B1: the only case where "on" is a change made elsewhere).
+  ctx.gw.push('12;1;1;0;2;0');
+  await until(ctx.clock, () => ctx.app.nodes.get(12)?.values.has('1:2'), 'state before');
   assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'unconfirmed');
   const before = offs(ctx.gw);
   ctx.gw.push('12;1;1;0;2;1');
@@ -383,9 +386,192 @@ test('I1: reports of on while the off could not leave do not lift it', async (t)
     },
   });
   await until(ctx.clock, () => ctx.app.link === link, 'link');
+  // Known off before the click: only "never left" keeps the reports from counting.
+  handlers.onMessage({ node: 12, child: 1, type: 1, ack: 0, sub: 2, payload: '0' }, {});
   assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'kept');
   handlers.onMessage({ node: 12, child: 1, type: 1, ack: 0, sub: 2, payload: '1' }, {});
   handlers.onMessage({ node: 12, child: 1, type: 1, ack: 0, sub: 2, payload: '1' }, {});
   await settle(5);
   assert.ok(ctx.app.stops.has('12:1'));
+});
+
+/** r2: an off whose radio message is lost; the node keeps reporting its state. */
+async function lostOff(t, { before, reports }) {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  for (const line of before) ctx.gw.push(line);
+  await until(
+    ctx.clock,
+    () =>
+      before.length === 0 ||
+      ctx.app.nodes.get(before[0].split(';').map(Number)[0])?.values.size >= 1,
+    'before',
+  );
+  await settle(10);
+  const [node, child] = reports[0].split(';').map(Number);
+  await answer(ctx, command(ctx, F(node, child, node === 13 ? 'brightness' : 'relay'), 0));
+  for (let i = 0; i < 3; i += 1) {
+    for (const line of reports) ctx.gw.push(line);
+    await ctx.clock.advance(3000);
+    await settle(5);
+  }
+  return { ctx, node, child };
+}
+
+test('r2 B1: reports of on when it was on before the click do not lift the off', async (t) => {
+  const { ctx } = await lostOff(t, { before: ['12;1;1;0;2;1'], reports: ['12;1;1;0;2;1'] });
+  assert.ok(ctx.app.stops.has('12:1'), 'the off goes on');
+  await until(ctx.clock, () => ctx.app.stops.get('12:1').abandoned, 'abandoned', {
+    step: 500,
+    max: 200_000,
+  });
+  assert.equal(offs(ctx.gw), 5);
+  assert.match(status(ctx.gladys), /Off read 5 times/);
+});
+
+test('r2 B1: reports of on when the state before was unknown do not lift the off', async (t) => {
+  const { ctx } = await lostOff(t, { before: [], reports: ['12;1;1;0;2;1'] });
+  assert.ok(ctx.app.stops.has('12:1'));
+  assert.ok(offs(ctx.gw) >= 3, 'sent again');
+});
+
+test('r2 B1: a dimmer pair V_STATUS + V_PERCENTAGE is one reading', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  ctx.gw.push('13;1;1;0;2;0');
+  await until(ctx.clock, () => ctx.app.nodes.get(13)?.values.has('1:2'), 'state before');
+  await answer(ctx, command(ctx, F(13, 1, 'brightness'), 0));
+  ctx.gw.push('13;1;1;0;2;1');
+  ctx.gw.push('13;1;1;0;3;60');
+  await ctx.clock.advance(1000);
+  await settle(10);
+  assert.ok(ctx.app.stops.has('13:1'), 'one change, read once');
+  assert.equal(ctx.app.stops.get('13:1').onReports, 1);
+});
+
+test('r2 M1: the note "turned on again" goes with the next report, or after 10 min', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  for (const target of ['12;1', '13;1']) {
+    ctx.gw.push(`${target};1;0;2;0`);
+  }
+  await until(ctx.clock, () => ctx.app.nodes.get(13)?.values.has('1:2'), 'states before');
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+  await answer(ctx, command(ctx, F(13, 1, 'light'), 0));
+  for (const target of ['12;1', '12;1', '13;1', '13;1']) ctx.gw.push(`${target};1;0;2;1`);
+  await until(ctx.clock, () => ctx.app.overridden.size === 2, 'two lifted', { step: 1 });
+  ctx.gw.push('12;1;1;0;2;1');
+  await until(ctx.clock, () => !ctx.app.overridden.has('12:1'), 'next report', { step: 1 });
+  assert.ok(ctx.app.overridden.has('13:1'));
+  await ctx.clock.advance(601_000);
+  await ctx.app.updateStatus();
+  assert.doesNotMatch(status(ctx.gladys), /Turned on again/);
+});
+
+test('r2 I1: an answer proves only the oldest ask still waiting; unasked answers prove nothing', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  ctx.gw.silent = true;
+  // Unasked answers (another controller of the gateway): no ask waits, nothing proven.
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+  // Writes at 0, 1.5 s and 6.5 s, the next one at 26.5 s: at 18 s every ask is over 10 s old.
+  await ctx.clock.advance(14_500);
+  for (let i = 0; i < 10; i += 1) ctx.gw.push('0;255;3;0;2;2.3.2');
+  await until(ctx.clock, () => ctx.app.unaskedCount === 10, 'unasked answers read', { step: 1 });
+  assert.equal(ctx.app.stops.get('12:1').sends, 0, 'the asks expired: these answers prove nothing');
+  // A minute without unasked answers, then a fresh ask after the off proves it.
+  ctx.gw.silent = false;
+  const quietFrom = ctx.clock.elapsed;
+  await until(ctx.clock, () => ctx.app.stops.get('12:1').sends >= 1, 'proven', {
+    step: 500,
+    max: 150_000,
+  });
+  assert.ok(
+    ctx.clock.elapsed - quietFrom >= 59_000,
+    'no proof in the minute after unasked answers',
+  );
+  await until(ctx.clock, () => ctx.app.stops.get('12:1').abandoned, 'abandoned after 5', {
+    step: 1000,
+    max: 300_000,
+  });
+  assert.equal(ctx.app.stops.get('12:1').sends, 5);
+});
+
+test('r2 M2: an attempt to the same gateway is kept when the configuration comes', async (t) => {
+  const gw = await fakeTcpGateway();
+  const store = memoryStore({
+    format: 1,
+    route: { transport: 'tcp', host: '127.0.0.1', port: gw.port },
+    stops: [{ node: 12, child: 1, sends: 0 }],
+  });
+  const first = deferred();
+  let calls = 0;
+  const openTcp = async (route, handlers) => {
+    calls += 1;
+    if (calls === 1) await first.promise;
+    return realOpenTcp(route, handlers);
+  };
+  const ctx = await setup(t, { gw, store, app: { openTcp }, connect: false });
+  const connecting = ctx.gladys.connect();
+  await until(ctx.clock, () => calls === 1, 'first attempt');
+  await ctx.clock.advance(3000);
+  first.resolve();
+  await connecting;
+  await until(ctx.clock, () => !ctx.app.stops.has('12:1'), 'off confirmed');
+  await ctx.clock.advance(5000);
+  assert.equal(calls, 1, 'one attempt, kept');
+  assert.equal(gw.connections, 1);
+});
+
+test('r2 I1: an ask lost while the gateway was away never delays the proof of a later off', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  ctx.gw.silent = true;
+  // The keepalive ask of the next minute is lost.
+  await until(
+    ctx.clock,
+    () => ctx.gw.sent((m) => m.type === 3 && m.sub === 2).length >= 2,
+    'lost ask',
+    {
+      step: 1000,
+      max: 90_000,
+    },
+  );
+  await ctx.clock.advance(12_000);
+  ctx.gw.silent = false;
+  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'unconfirmed');
+  assert.equal(ctx.app.stops.get('12:1').sends >= 1, true, 'proven by the answer to its own ask');
+});
+
+test('r2 I1: answers nobody asked for, coming all along, never make an unread off abandoned', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  ctx.gw.silent = true;
+  for (let i = 0; i < 6; i += 1) ctx.gw.push('0;255;3;0;2;2.3.2');
+  await settle(10);
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+  for (let i = 0; i < 60; i += 1) {
+    ctx.gw.push('0;255;3;0;2;2.3.2');
+    await ctx.clock.advance(3000);
+  }
+  const stop = ctx.app.stops.get('12:1');
+  assert.equal(stop.sends, 0);
+  assert.equal(stop.abandoned, false);
+  assert.match(status(ctx.gladys), /answers requests Gladys did not make/);
+});
+
+test('r2 I1: a proof followed within seconds by an answer nobody asked for is withdrawn', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  ctx.gw.silent = true;
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0), { max: 1 }).catch(() => {});
+  // A forged answer takes the place of the answer to the ask of the off...
+  ctx.gw.push('0;255;3;0;2;2.3.2');
+  await until(ctx.clock, () => ctx.app.stops.get('12:1').sends === 1, 'taken as proof', {
+    step: 1,
+  });
+  // ...and the next one shows answers come that nobody asked for.
+  ctx.gw.push('0;255;3;0;2;2.3.2');
+  await until(ctx.clock, () => ctx.app.unaskedAt !== undefined, 'unasked', { step: 1 });
+  assert.equal(ctx.app.stops.get('12:1').sends, 0);
 });

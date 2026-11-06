@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { F, answer, command, live, settle, setup, status, statesOf, until } from './helpers/app.js';
-import { memoryStore } from '../src/store.js';
+import { credentialsMark, memoryStore } from '../src/store.js';
 import { PacketGuard } from '../src/mqtt.js';
 
 const SECRET = 'S3cret-Passw0rd';
@@ -99,33 +99,39 @@ test('MQTT: credentials refused: no try before 15 min, persisted; an off is kept
   }
 });
 
-test('MQTT: a restart with the refused credentials waits; other credentials are tried at once', async (t) => {
-  const refused = { reasonCode: 135 };
-  const first = await setup(t, {
-    mqtt: true,
-    config: { mqtt_username: 'gladys', mqtt_password: SECRET },
-    gateway: { connack: () => refused },
-  });
-  await until(first.clock, () => first.store.data?.auth?.failures === 1, 'persisted');
-  const data = first.store.data;
-  await first.app.stop();
-  const again = await setup(t, {
-    mqtt: true,
-    gw: first.gw,
-    data,
-    config: { mqtt_username: 'gladys', mqtt_password: SECRET },
-  });
-  const before = first.gw.connects.length;
-  await again.clock.advance(60_000);
-  assert.equal(first.gw.connects.length, before);
-  assert.match(status(again.gladys), /refused the connection/);
-  const other = await setup(t, {
-    mqtt: true,
-    gw: first.gw,
-    data,
-    config: { mqtt_username: 'gladys', mqtt_password: 'another one' },
-  });
-  await until(other.clock, () => first.gw.connects.length > before, 'tried');
+test('MQTT: after a restart one try at once; the same refused pair then waits longer, another pair starts over', async (t) => {
+  // A fixed salt for which the two pairs have different marks (deterministic).
+  const SALT = '0'.repeat(32);
+  assert.notEqual(
+    credentialsMark(SALT, 'gladys', SECRET),
+    credentialsMark(SALT, 'gladys', 'another one'),
+  );
+  const start = Date.UTC(2026, 0, 1);
+  const data = {
+    format: 1,
+    auth: {
+      failures: 1,
+      until: start + 10 * 60_000,
+      mark: credentialsMark(SALT, 'gladys', SECRET),
+      salt: SALT,
+    },
+  };
+  for (const [password, wait] of [
+    [SECRET, /next try in 60 min/],
+    ['another one', /next try in 15 min/],
+  ]) {
+    const ctx = await setup(t, {
+      mqtt: true,
+      data,
+      config: { mqtt_username: 'gladys', mqtt_password: password },
+      gateway: { connack: () => ({ reasonCode: 135 }) },
+    });
+    await until(ctx.clock, () => ctx.gw.connects.length === 1, 'one try at once');
+    await until(ctx.clock, () => /refused the connection/.test(status(ctx.gladys)), 'refused');
+    assert.match(status(ctx.gladys), wait);
+    await ctx.clock.advance(10 * 60_000);
+    assert.equal(ctx.gw.connects.length, 1, 'then the spaced wait');
+  }
 });
 
 for (const behaviour of ['silent', 'close']) {
@@ -200,4 +206,17 @@ test('MQTT: the test button that succeeds lifts the refusal; the kept off leaves
   const result = await answer(ctx, ctx.app.testConnection(), { step: 20 });
   assert.match(result.en, /Gateway answered/);
   assert.equal(ctx.gw.received[0].payload, '0');
+});
+
+test('MQTT: a reconnection to Gladys during a refusal does not try again', async (t) => {
+  const ctx = await setup(t, {
+    mqtt: true,
+    config: { mqtt_username: 'gladys', mqtt_password: SECRET },
+    gateway: { connack: () => ({ reasonCode: 135 }) },
+  });
+  await until(ctx.clock, () => /refused the connection/.test(status(ctx.gladys)), 'refused');
+  const before = ctx.gw.connects.length;
+  await ctx.app.connected();
+  await ctx.clock.advance(60_000);
+  assert.equal(ctx.gw.connects.length, before);
 });

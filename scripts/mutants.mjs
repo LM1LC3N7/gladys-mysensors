@@ -187,8 +187,8 @@ export const MUTANTS = [
   [
     'refused pair kept at restart',
     'src/app.js',
-    '      if (!same) this.liftAuth();',
-    '      this.liftAuth();',
+    '      else this.liftAuth();',
+    '      else this.tryAuthOnce();',
   ],
   ['unanswered twice', 'src/app.js', 'if (this.unanswered >= 2) {', 'if (this.unanswered >= 3) {'],
   // /data and ids.
@@ -223,7 +223,7 @@ export const MUTANTS = [
     '.filter(() => false)',
   ],
   // Review r1.
-  ['B1 proof after the ask', 'src/app.js', 'stop.proofAt <= this.answered', 'true'],
+  ['B1 proof after the ask', 'src/app.js', 'stop.proofAt <= seq', 'true'],
   [
     'B1 a write is not a send',
     'src/app.js',
@@ -257,8 +257,8 @@ export const MUTANTS = [
   [
     'I1 reports after the off only',
     'src/app.js',
-    'if (!stop || !this.stopLeft(stop)) return;\n    stop.onReports',
-    'if (!stop) return;\n    stop.onReports',
+    "if (!stop || !this.stopLeft(stop) || stop.departure !== '0') return;",
+    "if (!stop || stop.departure !== '0') return;",
   ],
   ['I2 click during an attempt', 'src/app.js', 'if (urgent) this.urgentAfterAttempt = true;', ''],
   [
@@ -296,6 +296,54 @@ export const MUTANTS = [
     'M4 keepalive after answer',
     'src/app.js',
     '          // An answer (asked by the test button too) counts: the next ask a full minute later.\n          this.scheduleKeepalive();',
+    '',
+  ],
+  // Review r2.
+  ['r2 B1 departure known off', 'src/app.js', " || stop.departure !== '0') return;", ') return;'],
+  [
+    'r2 B1 dimmer pair one reading',
+    'src/app.js',
+    "else if (msg.ack === 0 && msg.sub === V.STATUS && msg.payload === '1') {",
+    "else if (msg.ack === 0 && ((msg.sub === V.STATUS && msg.payload === '1') || msg.sub === V.PERCENTAGE)) {",
+  ],
+  [
+    'r2 I1 unasked answers',
+    'src/app.js',
+    'const ask = this.asks.shift();',
+    'const ask = this.asks.shift() ?? { seq: this.askSeq };',
+  ],
+  [
+    'r2 I1 unasked answers suspend proofs',
+    'src/app.js',
+    '    if (this.unaskedAt !== undefined && now - this.unaskedAt < TIMINGS.unaskedQuiet) return;\n',
+    '',
+  ],
+  ['r2 I1 recent proofs withdrawn', 'src/app.js', '      this.revokeRecentProofs(now);\n', ''],
+  ['r2 I1 lost asks forgotten', 'src/app.js', 'now - this.asks[0].at > TIMINGS.askLife', 'false'],
+  ['r2 I1 oldest ask', 'src/app.js', 'this.proveStops(ask.seq);', 'this.proveStops(this.askSeq);'],
+  [
+    'r2 I2 one try after restart',
+    'src/app.js',
+    'if (same) this.tryAuthOnce();',
+    'if (same) void 0;',
+  ],
+  [
+    'r2 I2 restart only',
+    'src/app.js',
+    'this.memory.auth.failures > 0 && !previous',
+    'this.memory.auth.failures > 0',
+  ],
+  [
+    'r2 M1 note goes with the next report',
+    'src/app.js',
+    '    if (msg.ack === 0 && msg.sub === V.STATUS) this.overridden.delete(`${msg.node}:${msg.child}`);\n',
+    '',
+  ],
+  ['r2 M1 note expires', 'src/app.js', 'this.monotonic() - at > TIMINGS.overriddenNote', 'false'],
+  [
+    'r2 M2 same gateway attempt kept',
+    'src/app.js',
+    '    if (key !== undefined && this.linking && this.linkingKey === key && !this.link) return;\n',
     '',
   ],
   // Configuration.
