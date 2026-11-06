@@ -1,8 +1,8 @@
 {
-  "name": "gladys-integration-template-js",
-  "version": "1.0.0",
+  "name": "gladys-mysensors",
+  "version": "0.1.0",
   "private": true,
-  "description": "Official starter template to build an external integration for Gladys Assistant with the JavaScript SDK.",
+  "description": "Gladys Assistant external integration for MySensors home-made sensor networks: the nodes, sensors, relays and dimmers heard through an Ethernet (TCP) or MQTT gateway. Unofficial, not affiliated with the MySensors project.",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -10,13 +10,18 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test"
+    "test": "node --test --test-timeout=60000",
+    "audit": "npm audit --omit=dev",
+    "cover": "node scripts/cover.mjs cover.png",
+    "mutants": "node scripts/mutants.mjs",
+    "validate:manifest": "npx --yes github:GladysAssistant/integration-store ."
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@gladysassistant/integration-sdk": "^0.16.0"
+    "@gladysassistant/integration-sdk": "^0.16.0",
+    "mqtt": "^5.16.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

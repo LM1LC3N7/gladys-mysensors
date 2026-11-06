@@ -1,67 +1,132 @@
-# Template de démonstration
+# MySensors
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Lit les nœuds de votre réseau [MySensors](https://www.mysensors.org) et
+commande les relais et variateurs que vous déclarez sûrs, via **votre
+passerelle** sur votre réseau local :
 
-## Ce que vous obtenez
+- une **passerelle Ethernet** (W5100, ENC28J60, ESP8266...) : Gladys s'y
+  connecte, port TCP 5003 par défaut ;
+- ou une **passerelle MQTT** et votre broker MQTT (Mosquitto...), MQTT simple
+  (TCP).
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Les passerelles série (USB) ne sont pas prises en charge. Rien ne passe par
+Internet.
 
-## Configuration
+Intégration non officielle, sans lien avec le projet MySensors, jamais
+testée avec un vrai appareil : elle a été construite d'après le protocole
+série 2.x publié et pymysensors, la bibliothèque de Home Assistant, et testée
+contre des passerelles simulées. Dites-nous ce qui marche et ce qui
+ne marche pas.
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+## Sécurité
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Le protocole MySensors n'a ni mot de passe ni protection sur le réseau :
+n'importe qui sur votre réseau peut parler à la passerelle. À utiliser sur un
+réseau de confiance seulement. Le mot de passe MQTT est gardé par Gladys dans
+sa base, jamais réaffiché, envoyé seulement à votre broker.
 
-## Actions
+## Mise en route
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+1. Choisissez le type de passerelle.
+2. Ethernet : saisissez son adresse (`192.168.1.50`, ou `192.168.1.50:5004`
+   pour un autre port). MQTT : saisissez l'adresse du broker, l'utilisateur
+   et le mot de passe s'il en demande, et les deux préfixes de topic du
+   sketch de la passerelle (`MY_MQTT_PUBLISH_TOPIC_PREFIX`, `mygateway1-out`
+   par défaut, et `MY_MQTT_SUBSCRIBE_TOPIC_PREFIX`, `mygateway1-in` par
+   défaut).
+3. Enregistrez, puis **Tester la connexion** : la passerelle répond avec sa
+   version.
+4. Ouvrez l'onglet **Découverte** : les nœuds apparaissent quand ils se
+   présentent (à leur démarrage, ou après une découverte pour ceux qui sont
+   éveillés). Ajoutez-les.
 
-## Scènes
+## Ce qui est lu
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+Un appareil Gladys par nœud (nom de son sketch et id du nœud), une fonction
+par valeur d'un capteur : température (°C), humidité, pression (hPa),
+ouverture (ouvert / fermé), mouvement, fumée, fuite, vibration, éclairement
+(lux), humidité du sol, puissance (W), tension, courant, indice UV, distance
+(cm), pH, potentiel redox, la batterie du nœud, et l'état marche/arrêt et le
+niveau des relais, variateurs, chauffages et arrosages. Gladys répond aux
+nœuds avec le système métrique : un sketch qui envoie des °F, des pouces ou
+d'autres unités est lu comme s'il était métrique.
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+Les valeurs sont publiées dès leur arrivée. Une valeur qui n'est pas un
+nombre, vide ou hors plage est ignorée, jamais publiée comme 0. Un message
+gardé par le broker MQTT (retained) peut être ancien : il est ignoré.
 
-## Tableau de bord
+Volets, thermostats, lumières RGB, compteurs d'énergie (kWh), contrôleurs de
+scène, serrures et IR ne sont pas pris en charge dans cette version.
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+## Relais et variateurs
 
-## Dépannage
+Un relais ou un variateur peut alimenter n'importe quoi (une lampe, mais
+aussi une pompe, un chauffage, un congélateur, une porte de garage), et un
+« tout éteindre / tout allumer » d'un assistant vocal ou d'une scène touche
+chaque interrupteur et chaque lumière. Un relais (`S_BINARY`) ou un
+variateur (`S_DIMMER`) est donc seulement affiché, en lecture seule, tant que
+vous ne le déclarez pas sûr dans **Relais et variateurs déclarés sûrs** avec
+son couple `nœud:capteur` (par exemple `12:1, 12:2`). Il devient alors un
+interrupteur ou une lumière (marche/arrêt et luminosité). Après avoir changé
+la liste, relancez la découverte et mettez à jour l'appareil dans l'onglet
+Découverte. Chauffages et arrosages ne sont jamais commandés.
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+Une commande part avec le drapeau d'écho de MySensors : elle est confirmée
+quand le nœud la renvoie en écho (sa radio l'a reçue), ou quand le nœud
+signale son nouvel état. Sans écho en 3,5 s, elle est « envoyée, sans
+confirmation ». L'état affiché dans Gladys est celui que le nœud signale (un
+écho prouve seulement que le nœud a reçu la commande) : un sketch qui ne
+renvoie jamais son état laisse l'état inchangé dans Gladys.
+
+Allumer (ou une luminosité au-dessus de 0) est refusé, et rien n'est envoyé,
+quand : la configuration n'est pas lue ou pas valide ; le couple n'est pas
+déclaré sûr ; le nœud présente maintenant ce capteur comme un autre type ; la
+passerelle n'est pas connectée.
+
+## Éteindre
+
+Éteindre un relais ou une lumière (ou une luminosité de 0) n'est jamais
+refusé pour une déclaration, une option ou une configuration pas encore lue,
+et n'attend jamais le disque. L'arrêt part tout de suite si la passerelle est
+connectée ; sinon Gladys s'y connecte aussitôt et il part en premier. Sans
+écho du nœud, il est renvoyé après 1,5 s, 5 s, 20 s et 1 min (5 envois), puis
+signalé comme abandonné dans le statut jusqu'à un nouveau clic. Il est gardé
+sur le disque jusqu'à ce que le nœud le confirme, et renvoyé après un
+redémarrage, même avant la lecture de la configuration (passerelle Ethernet,
+ou broker MQTT sans identifiants). Une commande plus récente de la même cible
+réellement partie annule ses renvois.
+
+Il ne peut pas partir tant que la passerelle (ou le broker) est injoignable,
+que le broker refuse les identifiants ou que la configuration n'est pas
+valide : il est alors gardé et part en premier dès que la passerelle revient,
+que de nouveaux identifiants sont enregistrés ou que le bouton de test
+réussit. Le statut dit où il en est : gardé, envoyé et pas encore confirmé,
+ou abandonné.
+
+## Ids des nœuds
+
+Un nœud sans id fixe (`MY_NODE_ID AUTO`) en demande un au contrôleur. Avec
+**Attribuer les ids des nœuds** activé (par défaut), Gladys donne le plus
+petit id qu'aucun nœud n'utilise, et le garde sur le disque avant de le
+donner. Un id donné et inutilisé pendant 5 minutes est redonné ; 10 ids
+inutilisés au plus. Désactivez l'option si un autre contrôleur du même réseau
+attribue les ids.
+
+## Statut
+
+L'écran de configuration montre l'état du lien (connecté, en attente de la
+passerelle, injoignable avec le prochain essai), les arrêts non confirmés,
+les entrées ignorées de la liste des relais sûrs, les messages ignorés (mal
+formés, trop longs, ou au-delà de 200 par seconde), et si le disque de
+l'intégration ne peut pas être lu ou écrit. En Ethernet, une passerelle
+muette depuis plus de 150 s (vérifié chaque minute) est reconnectée ; après
+un échec, les essais suivants attendent 1 s, puis jusqu'à 1 minute.
+
+## Limites
+
+- Une passerelle (un réseau MySensors) par intégration.
+- Lignes de 256 octets et paquets MQTT de 4 Ko au plus ; 200 messages par
+  seconde au plus.
+- L'id du nœud est son identité (MySensors ne donne pas de numéro de série) :
+  un nœud reprogrammé avec un autre sketch sous le même id reste le même
+  appareil.

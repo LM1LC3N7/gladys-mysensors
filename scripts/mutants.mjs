@@ -1,0 +1,300 @@
+// -----------------------------------------------------------------------------
+// The mutants the tests must kill: each one breaks a guard of the code; the
+// suite (`node --test test/*.test.js`) must then fail. One at a time, in a
+// copy of the repository made in a fresh temporary directory (removed after),
+// the repository itself never touched; each run bounded in time (its whole
+// process group killed past the deadline: a mutant that makes a test hang
+// counts as killed only if the suite fails, and is reported).
+//
+// Usage: node scripts/mutants.mjs [name filter]   (wrap it in memcap on a dev VM)
+// -----------------------------------------------------------------------------
+
+import { spawn } from 'node:child_process';
+import { cp, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO = fileURLToPath(new URL('..', import.meta.url));
+const DEADLINE = 300_000;
+
+export const MUTANTS = [
+  // Stops.
+  [
+    'stop sent at once',
+    'src/app.js',
+    'if (this.link && !this.link.closed) this.sendStop(stop);\n    else this.ensureLink({ urgent: true });\n    this.saveLater();',
+    'this.saveLater();',
+  ],
+  [
+    'stop confirmed only after a send',
+    'src/app.js',
+    'if (!stop || !stop.sentHere) return;',
+    'if (!stop) return;',
+  ],
+  ['newer command cancels the stop', 'src/app.js', '    this.cancelStop(target);\n', ''],
+  ['five sends', 'src/app.js', 'export const STOP_SENDS = 5;', 'export const STOP_SENDS = 4;'],
+  [
+    'kept stops sent when the link opens',
+    'src/app.js',
+    '    this.sendDueStops();\n    this.send(',
+    '    this.send(',
+  ],
+  [
+    'stop via /data route before config',
+    'src/app.js',
+    'if (!route || this.dueStops().length === 0) return undefined;',
+    'return undefined;',
+  ],
+  [
+    'click never overwritten by /data',
+    'src/app.js',
+    'if (!this.stops.has(key)) {\n          this.stops.set(key, {',
+    'if (true) {\n          this.stops.set(key, {',
+  ],
+  // Commands.
+  [
+    'declared safe',
+    'src/app.js',
+    'if (!this.isSafe(parsed.node, parsed.child)) throw',
+    'if (false) throw',
+  ],
+  ['presented type', 'src/app.js', 'if (presented && presented.sType !== expected)', 'if (false)'],
+  [
+    'gateway live',
+    'src/app.js',
+    'if (!this.link || this.link.closed || !this.live) throw',
+    'if (!this.link || this.link.closed) throw',
+  ],
+  [
+    'echo exact payload',
+    'src/protocol.js',
+    '  a.sub === b.sub &&\n  a.payload === b.payload;',
+    '  a.sub === b.sub;',
+  ],
+  [
+    'echo not a state',
+    'src/app.js',
+    '      this.resolveEcho(msg);\n      return;',
+    '      this.resolveEcho(msg);',
+  ],
+  [
+    'brightness bounded',
+    'src/model.js',
+    'if (!Number.isInteger(n) || n < 0 || n > 100) return undefined;',
+    'if (!Number.isInteger(n) || n < 0) return undefined;',
+  ],
+  [
+    'heater never commanded',
+    'src/model.js',
+    '    case S.HEATER:\n    case S.SPRINKLER:\n      return [KIND.STATE];\n',
+    '',
+  ],
+  [
+    'discovery switch only when safe',
+    'src/app.js',
+    'kindsOfPresentation(sType, this.isSafe(info.id, child))',
+    'kindsOfPresentation(sType, true)',
+  ],
+  // Values.
+  ['retained ignored', 'src/app.js', '    if (retained) return;\n', ''],
+  [
+    'door inverted',
+    'src/model.js',
+    'return tripped === undefined ? undefined : 1 - tripped;',
+    'return tripped;',
+  ],
+  [
+    'range of a measurement',
+    'src/model.js',
+    'return value !== undefined && value >= min && value <= max ? value : undefined;',
+    'return value;',
+  ],
+  [
+    'strict number',
+    'src/protocol.js',
+    '!/^-?\\d{1,9}(?:\\.\\d{1,6})?$/.test(payload)',
+    '!/-?\\d{1,9}(?:\\.\\d{1,6})?/.test(payload)',
+  ],
+  [
+    'fresh values only at creation',
+    'src/app.js',
+    'if (now - value.at <= TIMINGS.stateFresh) {',
+    'if (true) {',
+  ],
+  [
+    'nothing old after reconnection',
+    'src/app.js',
+    '    this.publisher.clear();\n    this.gladys.forgetPublishedStates?.();\n',
+    '',
+  ],
+  [
+    'measurements spaced',
+    'src/publisher.js',
+    'if (entry.spaced && last !== undefined && now - last < TIMINGS.measurementSpacing) continue;',
+    '',
+  ],
+  // Bounds.
+  ['line bound', 'src/tcp.js', 'if (this.size + piece.length > this.max) {', 'if (false) {'],
+  ['packet guard', 'src/mqtt.js', 'if (length + this.header.length > this.max) {', 'if (false) {'],
+  ['rate limit', 'src/app.js', '    if (b.tokens < 1) return false;\n', ''],
+  [
+    // The MQTT check before decoding is doubled by this one (same bound): mutated here.
+    'payload bound',
+    'src/protocol.js',
+    'export const MAX_PAYLOAD = 200;',
+    'export const MAX_PAYLOAD = 100_000;',
+  ],
+  [
+    'answers spaced per node',
+    'src/app.js',
+    'if (last !== undefined && now - last < 2000) return false;',
+    '',
+  ],
+  // Link.
+  [
+    'backoff',
+    'src/app.js',
+    'const wait = waits[Math.min(Math.max(this.failures, 1), waits.length) - 1];',
+    'const wait = waits[0];',
+  ],
+  ['silent TCP gateway closed', 'src/app.js', 'if (silent > TIMINGS.silence) {', 'if (false) {'],
+  [
+    'old link closed first',
+    'src/app.js',
+    '      await bounded(old.closedSocket(), 2000, this.timers, undefined);\n',
+    '',
+  ],
+  [
+    'config retried in connected',
+    'src/app.js',
+    'this.configTimer = this.timers.setTimeout(() => {\n        this.configTimer = undefined;\n        this.readConfig().catch(() => {});\n      }, wait);',
+    '',
+  ],
+  // Credentials.
+  [
+    'no try while refused',
+    'src/app.js',
+    'if (cfg.transport === TRANSPORTS.MQTT && this.authStopped) return;',
+    '',
+  ],
+  [
+    'new credentials tried',
+    'src/app.js',
+    '    if (fromUser) {\n      this.liftAuth();',
+    '    if (fromUser) {\n      void 0;',
+  ],
+  [
+    'refused pair kept at restart',
+    'src/app.js',
+    '      if (!same) this.liftAuth();',
+    '      this.liftAuth();',
+  ],
+  ['unanswered twice', 'src/app.js', 'if (this.unanswered >= 2) {', 'if (this.unanswered >= 3) {'],
+  // /data and ids.
+  [
+    'never written over unreadable',
+    'src/app.js',
+    "    if (this.memoryState !== 'ok') return false;\n    this.memory.stops",
+    '    this.memory.stops',
+  ],
+  [
+    'one read at a time',
+    'src/app.js',
+    'this.rawLoad ??= Promise.resolve',
+    'this.rawLoad = Promise.resolve',
+  ],
+  [
+    'id saved before given',
+    'src/app.js',
+    'if (!(await this.saveMemory())) {',
+    'if (!(await this.saveMemory()) && false) {',
+  ],
+  [
+    'unused ids bounded',
+    'src/app.js',
+    '      if (unseen.length >= LIMITS.unseenIds) return T.idsFull;\n',
+    '',
+  ],
+  [
+    'unused id given again',
+    'src/app.js',
+    '.filter((e) => wall - e.at >= TIMINGS.idReuse || e.at > wall)',
+    '.filter(() => false)',
+  ],
+  // Configuration.
+  [
+    'password without user',
+    'src/config.js',
+    "else if (password !== '' && username === '') config.problem = 'password-alone';",
+    '',
+  ],
+  [
+    'route without credentials',
+    'src/config.js',
+    'if (config.transport === TRANSPORTS.MQTT && (config.username || config.password)) {',
+    'if (false) {',
+  ],
+  ['no multicast', 'src/config.js', 'if (parts[0] === 0 || parts[0] >= 224) return false;', ''],
+];
+
+async function run(dir) {
+  // `node --test test/*.test.js`, the glob expanded here.
+  const files = (await readdir(join(dir, 'test'))).filter((f) => f.endsWith('.test.js')).sort();
+  return new Promise((resolve) => {
+    const args = ['--test', '--test-timeout=60000', ...files.map((f) => `test/${f}`)];
+    const child = spawn(process.execPath, args, {
+      cwd: dir,
+      stdio: 'ignore',
+      detached: true,
+      shell: false,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+      resolve('timeout');
+    }, DEADLINE);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? 'survived' : 'killed');
+    });
+  });
+}
+
+async function main() {
+  const filter = process.argv[2];
+  const survivors = [];
+  for (const [name, file, from, to] of MUTANTS) {
+    if (filter && !name.includes(filter)) continue;
+    const dir = await mkdtemp(join(tmpdir(), 'mysensors-mutant-'));
+    try {
+      await cp(REPO, dir, {
+        recursive: true,
+        filter: (src) => !/[/\\](\.git|node_modules)$/.test(src),
+      });
+      await symlink(join(REPO, 'node_modules'), join(dir, 'node_modules'), 'dir');
+      const path = join(dir, file);
+      const text = await readFile(path, 'utf8');
+      const count = text.split(from).length - 1;
+      if (count !== 1) {
+        console.log(`STALE   ${name}: found ${count} times in ${file}`);
+        survivors.push(name);
+        continue;
+      }
+      await writeFile(path, text.replace(from, to));
+      const outcome = await run(dir);
+      console.log(`${outcome.toUpperCase().padEnd(8)}${name}`);
+      if (outcome !== 'killed') survivors.push(name);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+  console.log(survivors.length ? `Not killed: ${survivors.join(', ')}` : 'Every mutant killed');
+  process.exitCode = survivors.length ? 1 : 0;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

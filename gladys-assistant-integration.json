@@ -1,177 +1,185 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "MySensors",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Your home-made MySensors nodes: sensors, relays and dimmers, through an Ethernet or MQTT gateway.",
+    "fr": "Vos nœuds MySensors faits maison : capteurs, relais, variateurs, par passerelle Ethernet ou MQTT."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-mysensors:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-mysensors/main/cover.png",
+  "categories": ["protocols", "environment", "lighting"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your MySensors network in Gladys",
+        "fr": "Votre réseau MySensors dans Gladys"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Reads the nodes of your MySensors network (temperature, humidity, pressure, doors, motion, smoke, leaks, light, power, battery...) and controls the relays and dimmers you declare safe, through YOUR gateway on your local network: an Ethernet gateway (TCP, port 5003) or an MQTT gateway and your broker. Serial (USB) gateways are not supported. Nothing goes through the Internet; the MySensors protocol has no password: use it on a trusted network only. Unofficial integration, not affiliated with the MySensors project, never tested with a real device.",
+        "fr": "Lit les nœuds de votre réseau MySensors (température, humidité, pression, portes, mouvement, fumée, fuites, lumière, puissance, batterie...) et commande les relais et variateurs que vous déclarez sûrs, via VOTRE passerelle sur votre réseau local : une passerelle Ethernet (TCP, port 5003) ou une passerelle MQTT et votre broker. Les passerelles série (USB) ne sont pas prises en charge. Rien ne passe par Internet ; le protocole MySensors n'a pas de mot de passe : à utiliser sur un réseau de confiance seulement. Intégration non officielle, sans lien avec le projet MySensors, jamais testée avec un vrai appareil."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://www.mysensors.org/build/ethernet_gateway",
+          "label": { "en": "Ethernet gateway", "fr": "Passerelle Ethernet" }
+        },
+        {
+          "url": "https://www.mysensors.org/build/mqtt_gateway",
+          "label": { "en": "MQTT gateway", "fr": "Passerelle MQTT" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
-    },
-    {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
+      "key": "transport",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "label": { "en": "Gateway", "fr": "Passerelle" },
       "required": false,
-      "default": "celsius",
+      "default": "tcp",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        {
+          "value": "tcp",
+          "label": { "en": "Ethernet gateway (TCP)", "fr": "Passerelle Ethernet (TCP)" }
+        },
+        { "value": "mqtt", "label": { "en": "MQTT gateway", "fr": "Passerelle MQTT" } }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "gateway_address",
+      "type": "string",
+      "label": { "en": "Ethernet gateway address", "fr": "Adresse de la passerelle Ethernet" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Its IP address or host name, port 5003 unless you add another one (192.168.1.50:5004). Gladys connects to it.",
+        "fr": "Son adresse IP ou son nom, port 5003 sauf si vous en ajoutez un autre (192.168.1.50:5004). Gladys s'y connecte."
+      },
+      "placeholder": { "en": "192.168.1.50", "fr": "192.168.1.50" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "mqtt_section",
+      "type": "section",
+      "label": { "en": "MQTT gateway", "fr": "Passerelle MQTT" },
+      "description": {
+        "en": "Only for an MQTT gateway: the broker it publishes to, and the two topic prefixes of its sketch (MY_MQTT_PUBLISH_TOPIC_PREFIX and MY_MQTT_SUBSCRIBE_TOPIC_PREFIX). Plain MQTT (TCP) only.",
+        "fr": "Seulement pour une passerelle MQTT : le broker où elle publie, et les deux préfixes de topic de son sketch (MY_MQTT_PUBLISH_TOPIC_PREFIX et MY_MQTT_SUBSCRIBE_TOPIC_PREFIX). MQTT simple (TCP) seulement."
+      }
+    },
+    {
+      "key": "mqtt_broker",
+      "type": "string",
+      "label": { "en": "MQTT broker address", "fr": "Adresse du broker MQTT" },
+      "description": {
+        "en": "Its IP address or host name, port 1883 unless you add another one.",
+        "fr": "Son adresse IP ou son nom, port 1883 sauf si vous en ajoutez un autre."
+      },
+      "placeholder": { "en": "192.168.1.20", "fr": "192.168.1.20" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "mqtt_username",
+      "type": "string",
+      "label": { "en": "User name", "fr": "Utilisateur" },
+      "description": {
+        "en": "The user of the broker, if it asks for one.",
+        "fr": "L'utilisateur du broker, s'il en demande un."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": ""
+    },
+    {
+      "key": "mqtt_password",
+      "type": "secret",
+      "label": { "en": "Password", "fr": "Mot de passe" },
+      "description": {
+        "en": "The password of the broker: kept by Gladys in its database, never shown again, sent only to your broker.",
+        "fr": "Le mot de passe du broker : gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à votre broker."
+      },
+      "required": false
+    },
+    {
+      "key": "mqtt_publish_prefix",
+      "type": "string",
+      "label": { "en": "Topic the gateway publishes to", "fr": "Topic où publie la passerelle" },
+      "description": {
+        "en": "MY_MQTT_PUBLISH_TOPIC_PREFIX of the gateway sketch.",
+        "fr": "MY_MQTT_PUBLISH_TOPIC_PREFIX du sketch de la passerelle."
+      },
+      "required": false,
+      "default": "mygateway1-out"
+    },
+    {
+      "key": "mqtt_subscribe_prefix",
+      "type": "string",
+      "label": { "en": "Topic the gateway listens to", "fr": "Topic qu'écoute la passerelle" },
+      "description": {
+        "en": "MY_MQTT_SUBSCRIBE_TOPIC_PREFIX of the gateway sketch.",
+        "fr": "MY_MQTT_SUBSCRIBE_TOPIC_PREFIX du sketch de la passerelle."
+      },
+      "required": false,
+      "default": "mygateway1-in"
+    },
+    {
+      "key": "actuators_section",
+      "type": "section",
+      "label": { "en": "Relays and dimmers", "fr": "Relais et variateurs" },
+      "description": {
+        "en": "A MySensors relay or dimmer may feed anything (a lamp, but also a pump, a heater, a freezer, a garage door), and a \"turn everything off / on\" of a voice assistant or a scene reaches every switch and every light. So a relay or a dimmer is only shown in Gladys, read only, until you declare it safe below: it then becomes a switch (relay, S_BINARY) or a light (dimmer, S_DIMMER). Turning one off is always allowed. Heaters, sprinklers and covers are never commanded.",
+        "fr": "Un relais ou un variateur MySensors peut alimenter n'importe quoi (une lampe, mais aussi une pompe, un chauffage, un congélateur, une porte de garage), et un « tout éteindre / tout allumer » d'un assistant vocal ou d'une scène touche chaque interrupteur et chaque lumière. Un relais ou un variateur est donc seulement affiché dans Gladys, en lecture seule, tant que vous ne le déclarez pas sûr ci-dessous : il devient alors un interrupteur (relais, S_BINARY) ou une lumière (variateur, S_DIMMER). L'éteindre est toujours permis. Chauffages, arrosages et volets ne sont jamais commandés."
+      }
+    },
+    {
+      "key": "safe_actuators",
+      "type": "string",
+      "label": {
+        "en": "Relays and dimmers declared safe",
+        "fr": "Relais et variateurs déclarés sûrs"
+      },
+      "description": {
+        "en": "node:child pairs separated by commas (12:1, 12:2, 30:1). Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
+        "fr": "Couples nœud:capteur séparés par des virgules (12:1, 12:2, 30:1). Seulement des charges qu'on peut éteindre ou allumer à tout moment (une lampe, une prise de lampe)."
+      },
+      "placeholder": { "en": "12:1, 12:2", "fr": "12:1, 12:2" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "assign_node_ids",
+      "type": "boolean",
+      "label": { "en": "Hand out node ids", "fr": "Attribuer les ids des nœuds" },
+      "description": {
+        "en": "A node without a fixed id (MY_NODE_ID AUTO) asks the controller for one: Gladys gives the lowest free id. Turn off if another controller of the same network does it.",
+        "fr": "Un nœud sans id fixe (MY_NODE_ID AUTO) en demande un au contrôleur : Gladys donne le plus petit id libre. À désactiver si un autre contrôleur du même réseau s'en charge."
+      },
+      "required": false,
+      "default": true
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the names and messages",
+        "fr": "Langue des noms et des messages"
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }
