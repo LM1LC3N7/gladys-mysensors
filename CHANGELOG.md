@@ -19,7 +19,9 @@ the notes of the version's GitHub Release.
   distance, pH, ORP and battery, one Gladys device per node.
 - Relays and dimmers declared safe by the user (`node:child`) become switches
   and lights, confirmed by the echo of the node; the others are read only.
-  Turning off is never held: sent at once, sent again without echo (5 sends),
+  Turning off is never held: sent at once, sent again without echo (5 sends
+  proven read by the gateway; a write on a connection closed at once never
+  counts), lifted when the node is turned on again in place (reported twice),
   kept on disk until the node confirms it, even across a restart.
 - Node ids handed out to the nodes that ask for one, kept on disk first.
 - Bounds on everything that comes in: lines of 256 bytes, MQTT packets of

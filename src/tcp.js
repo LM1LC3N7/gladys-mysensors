@@ -53,9 +53,9 @@ export class LineReader {
 }
 
 /** The socket to the gateway, once open (rejects past the timeout, the socket destroyed). */
-export function tcpConnect({ host, port }, { timers = globalThis } = {}) {
+export function tcpConnect({ host, port }, { timers = globalThis, netConnect = net.connect } = {}) {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({ host, port });
+    const socket = netConnect({ host, port });
     socket.setNoDelay(true);
     const timer = timers.setTimeout(() => {
       socket.destroy();

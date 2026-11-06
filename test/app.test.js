@@ -263,8 +263,10 @@ test('on refused while the gateway is not connected: nothing sent', async (t) =>
   await until(ctx.clock, () => ctx.app.link, 'link');
   await assert.rejects(answer(ctx, command(ctx, F(12, 1, 'relay'), 1)), /not connected/);
   assert.equal(ctx.gw.sent((m) => m.type === 1).length, 0);
-  // An off leaves on the open link even though the gateway never answered.
-  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'unconfirmed');
+  // An off is written on the open link even though the gateway never answered;
+  // nothing proves it was read: kept, never counted as sent.
+  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'kept');
+  assert.equal(ctx.app.stops.get('12:1').sends, 0);
   assert.ok(ctx.gw.sent((m) => m.type === 1 && m.payload === '0').length >= 1);
 });
 

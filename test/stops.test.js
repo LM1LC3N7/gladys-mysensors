@@ -39,7 +39,7 @@ test('an off while the gateway is down is kept, never abandoned, and leaves firs
   const ctx = await setup(t, { gw: down });
   await until(ctx.clock, () => ctx.app.reason !== undefined, 'first failure');
   assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'kept');
-  assert.match(status(ctx.gladys), /Off kept, not sent yet .*12:1/);
+  assert.match(status(ctx.gladys), /Off kept, not read by the gateway yet .*12:1/);
   // An hour down: the tries are spaced (never a storm), the stop stays.
   await ctx.clock.advance(3_600_000);
   assert.ok(ctx.app.stops.has('12:1'));
@@ -78,11 +78,13 @@ test('no echo: sent again after 1.5 s, 5 s, 20 s and 1 min, then reported abando
   assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'unconfirmed');
   assert.equal(offs(ctx.gw), 2);
   await until(ctx.clock, () => offs(ctx.gw) === 5, 'five sends', { step: 500, max: 200_000 });
-  await ctx.clock.advance(10_000);
-  await settle(10);
+  await until(ctx.clock, () => ctx.app.stops.get('12:1').abandoned, 'abandoned', {
+    step: 500,
+    max: 120_000,
+  });
   assert.equal(offs(ctx.gw), 5);
-  assert.ok(ctx.app.stops.get('12:1').abandoned);
-  await until(ctx.clock, () => /Off sent 5 times/.test(status(ctx.gladys)), 'status');
+  assert.equal(ctx.app.stops.get('12:1').sends, 5, 'five sends, each read by the gateway');
+  await until(ctx.clock, () => /Off read 5 times/.test(status(ctx.gladys)), 'status');
   await ctx.clock.advance(600_000);
   assert.equal(offs(ctx.gw), 5);
   // A new click: the whole budget again.
@@ -233,7 +235,7 @@ test('a report of off while the stop could not be written yet never confirms it'
   link.writable = true;
   // Tried again on the open link without a new click.
   await ctx.clock.advance(1600);
-  assert.equal(link.sent.length, 1);
+  assert.equal(link.sent.filter((m) => m.type === 1).length, 1);
   handlers.onMessage({ node: 12, child: 1, type: 1, ack: 0, sub: 2, payload: '0' }, {});
   assert.ok(!ctx.app.stops.has('12:1'));
 });

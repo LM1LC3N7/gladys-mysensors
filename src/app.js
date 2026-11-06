@@ -77,6 +77,23 @@ const TIMEOUT = Symbol('timeout');
 export const STOP_SENDS = 5;
 const STOP_WAITS = [TIMINGS.stopRetryInClick, ...TIMINGS.stopResends];
 
+/** A stop kept in memory (see the header of the class). */
+const newStop = (node, child, sends) => ({
+  node,
+  child,
+  /** Sends proven read by the gateway (an answer after it, or an echo). */
+  sends,
+  /** Writes of this process since the click (the resend schedule). */
+  writes: 0,
+  sentHere: false,
+  writtenOn: undefined,
+  proofAt: 0,
+  onReports: 0,
+  abandoned: sends >= STOP_SENDS,
+  timer: undefined,
+  waiters: [],
+});
+
 /** A promise bounded in time: `fallback` when it takes longer. */
 function bounded(promise, ms, timers, fallback) {
   let timer;
@@ -166,10 +183,18 @@ export class MySensorsApp {
     this.idNote = undefined;
     this.assigning = false;
     this.lastScanAt = -Infinity;
+    this.lastDiscoverAt = -Infinity;
+    /** "node:child" of the stops lifted by the node turned on again in place. */
+    this.overridden = new Set();
+    this.urgentAfterAttempt = false;
+    this.asked = 0;
+    this.answered = 0;
     this.scanTimers = new Set();
   }
 
   resetSession() {
+    this.asked = 0;
+    this.answered = 0;
     this.live = false;
     this.version = undefined;
     this.lastRx = this.monotonic();
@@ -293,6 +318,8 @@ export class MySensorsApp {
   /** A new gateway (or none): the link closed, the next one opened once it is gone. */
   async restartLink(key) {
     if (key !== undefined && key === this.linkKey && this.link && !this.link.closed) return;
+    // An attempt to the same gateway is going on: kept (its outcome plans the next try).
+    if (key !== undefined && this.linking && this.linkingKey === key && !this.link) return;
     const gen = ++this.linkGen;
     this.switching = true;
     this.clearRetry();
@@ -392,15 +419,7 @@ export class MySensorsApp {
       for (const s of loaded.stops) {
         const key = `${s.node}:${s.child}`;
         if (!this.stops.has(key)) {
-          this.stops.set(key, {
-            node: s.node,
-            child: s.child,
-            sends: s.sends,
-            sentHere: false,
-            abandoned: s.sends >= STOP_SENDS,
-            timer: undefined,
-            waiters: [],
-          });
+          this.stops.set(key, newStop(s.node, s.child, s.sends));
         }
       }
       if (loaded.auth.failures > 0 && loaded.auth.until > 0) {
@@ -486,7 +505,12 @@ export class MySensorsApp {
 
   /** Opens the link unless it is open or opening; `urgent` (a click) skips the wait between tries. */
   ensureLink({ urgent = false } = {}) {
-    if (this.closed || (this.link && !this.link.closed) || this.linking) return;
+    if (this.closed || (this.link && !this.link.closed)) return;
+    if (this.linking) {
+      // A click during an attempt: if it fails, one more try at once (then the waits again).
+      if (urgent) this.urgentAfterAttempt = true;
+      return;
+    }
     if (this.switching) {
       // The previous link is still closing: the next one opens right after.
       return;
@@ -496,6 +520,7 @@ export class MySensorsApp {
     if (cfg.transport === TRANSPORTS.MQTT && this.authStopped) return;
     if (this.retryTimer && !urgent) return;
     this.clearRetry();
+    this.linkingKey = sessionKey(cfg);
     this.linking = this.openLink(cfg).finally(() => {
       this.linking = undefined;
       if (this.relinkNow) {
@@ -536,14 +561,24 @@ export class MySensorsApp {
           ? await this.openTcp(cfg, handlers)
           : await this.openMqtt(cfg, { ...handlers, protocolVersion: this.protocolVersion });
     } catch (err) {
-      if (gen !== this.linkGen || this.closed) return;
+      if (gen !== this.linkGen || this.closed) {
+        // An attempt for an older configuration: the current one is tried right after.
+        if (!this.closed) this.relinkNow = true;
+        return;
+      }
       await this.linkFailed(cfg, err);
+      if (this.urgentAfterAttempt) {
+        this.urgentAfterAttempt = false;
+        this.relinkNow = true;
+      }
       return;
     }
     if (gen !== this.linkGen || this.closed) {
       link.close('stale');
+      if (!this.closed) this.relinkNow = true;
       return;
     }
+    this.urgentAfterAttempt = false;
     holder.link = link;
     this.link = link;
     this.linkKey = key;
@@ -561,16 +596,9 @@ export class MySensorsApp {
       this.liftAuth();
       this.saveLater();
     }
-    // Every kept stop first, then the version of the gateway (its answer proves it alive).
-    this.sendDueStops();
-    this.send({
-      node: GATEWAY_NODE,
-      child: NODE_CHILD,
-      type: TYPE.INTERNAL,
-      ack: 0,
-      sub: I.VERSION,
-      payload: '',
-    });
+    // Every kept stop first, then the version of the gateway (its answer proves
+    // it alive, and that it read the stops).
+    if (this.sendDueStops() === 0) this.askVersion();
     this.lastStatus = undefined;
     await this.updateStatus();
   }
@@ -621,7 +649,12 @@ export class MySensorsApp {
 
   linkClosed(reason) {
     const lived = this.openedAt === undefined ? 0 : this.monotonic() - this.openedAt;
+    const closed = this.link;
     this.link = undefined;
+    // Stops written on it and not proven read: never counted, sent again on the next link.
+    for (const stop of this.stops.values()) {
+      if (stop.writtenOn === closed) stop.writtenOn = undefined;
+    }
     this.reason = typeof reason === 'string' ? reason.slice(0, 80) : 'closed';
     if (lived >= TIMINGS.stableSession) this.failures = 0;
     this.failures += 1;
@@ -704,14 +737,7 @@ export class MySensorsApp {
         this.updateStatus().catch(() => {});
       }
     }
-    this.send({
-      node: GATEWAY_NODE,
-      child: NODE_CHILD,
-      type: TYPE.INTERNAL,
-      ack: 0,
-      sub: I.VERSION,
-      payload: '',
-    });
+    this.askVersion();
     this.updateStatus().catch(() => {});
   }
 
@@ -827,6 +853,13 @@ export class MySensorsApp {
       if (!known && !info.children.has(msg.child)) this.scheduleDevices();
     }
     if (msg.sub === V.STATUS && msg.payload === '0') this.stopSeen(msg.node, msg.child);
+    else if (
+      msg.ack === 0 &&
+      ((msg.sub === V.STATUS && msg.payload === '1') ||
+        (msg.sub === V.PERCENTAGE && /^[1-9]\d{0,2}$/.test(msg.payload)))
+    ) {
+      this.stopContradicted(msg.node, msg.child);
+    }
     // An echo (ack 1) proves the node received a command, not that it applied
     // it: only the reports of the node (ack 0) are published as states.
     if (msg.ack === 1) {
@@ -841,6 +874,8 @@ export class MySensorsApp {
       case I.VERSION:
         if (msg.node === GATEWAY_NODE) {
           this.version = cleanText(msg.payload);
+          this.answered += 1;
+          this.proveStops();
           for (const w of this.versionWaiters.splice(0)) w.resolve(true);
           this.updateStatus().catch(() => {});
           // An answer (asked by the test button too) counts: the next ask a full minute later.
@@ -848,7 +883,11 @@ export class MySensorsApp {
         }
         return;
       case I.GATEWAY_READY:
-        if (msg.node === GATEWAY_NODE) this.send(discoverMessage(I.DISCOVER));
+        // Once a minute at most (a forged "ready" never floods the radio network).
+        if (msg.node === GATEWAY_NODE && this.monotonic() - this.lastDiscoverAt >= TIMINGS.scan) {
+          this.lastDiscoverAt = this.monotonic();
+          this.send(discoverMessage(I.DISCOVER));
+        }
         return;
       case I.ID_REQUEST:
         this.assignId().catch((err) => this.logger.warn(`Handing out an id: ${err.message}`));
@@ -1269,20 +1308,15 @@ export class MySensorsApp {
     const key = `${node}:${child}`;
     let stop = this.stops.get(key);
     if (!stop) {
-      stop = {
-        node,
-        child,
-        sends: 0,
-        sentHere: false,
-        abandoned: false,
-        timer: undefined,
-        waiters: [],
-      };
+      stop = newStop(node, child, 0);
       this.stops.set(key, stop);
     }
     // A new click: the whole budget again.
     stop.sends = 0;
+    stop.writes = 0;
+    stop.onReports = 0;
     stop.abandoned = false;
+    this.overridden.delete(key);
     if (stop.timer) this.timers.clearTimeout(stop.timer);
     stop.timer = undefined;
     const confirmed = new Promise((resolve) => stop.waiters.push(resolve));
@@ -1296,10 +1330,29 @@ export class MySensorsApp {
     return stop.sends > 0 ? 'unconfirmed' : 'kept';
   }
 
-  /** Writes a stop; only a write on the open link counts; the next resend armed at once. */
-  sendStop(stop) {
-    if (stop.abandoned || this.stops.get(`${stop.node}:${stop.child}`) !== stop) return;
+  /** Asks the gateway its version: true when written (its answer proves what was written before). */
+  askVersion() {
     const sent = this.send({
+      node: GATEWAY_NODE,
+      child: NODE_CHILD,
+      type: TYPE.INTERNAL,
+      ack: 0,
+      sub: I.VERSION,
+      payload: '',
+    });
+    if (sent) this.asked += 1;
+    return sent;
+  }
+
+  /**
+   * Writes a stop, then (unless `ask` is false: the caller asks once for
+   * several) the version of the gateway. The write counts as a send only once
+   * the gateway answered that ask on the same link (it read the stop before
+   * it) or the node echoed it: a link closed before never counts.
+   */
+  sendStop(stop, { ask = true } = {}) {
+    if (stop.abandoned || this.stops.get(`${stop.node}:${stop.child}`) !== stop) return false;
+    const written = this.send({
       node: stop.node,
       child: stop.child,
       type: TYPE.SET,
@@ -1307,58 +1360,100 @@ export class MySensorsApp {
       sub: V.STATUS,
       payload: '0',
     });
-    if (!sent) {
-      // Not written (the link is closing): tried again shortly on an open
-      // link; a link that opens sends it anyway. Never counted as a send.
-      if (!stop.timer) {
-        stop.timer = this.timers.setTimeout(() => {
-          stop.timer = undefined;
-          if (this.link && !this.link.closed) this.sendStop(stop);
-        }, TIMINGS.stopRetryInClick);
-      }
-      return;
-    }
-    stop.sends += 1;
-    stop.sentHere = true;
     if (stop.timer) this.timers.clearTimeout(stop.timer);
     stop.timer = undefined;
-    if (stop.sends >= STOP_SENDS) {
-      // The last send: abandoned only if no echo comes within the echo time.
+    if (!written) {
+      // Not written (the link is closing): tried again shortly on an open
+      // link; a link that opens sends it anyway. Never counted as a send.
       stop.timer = this.timers.setTimeout(() => {
         stop.timer = undefined;
-        if (this.stops.get(`${stop.node}:${stop.child}`) !== stop) return;
-        stop.abandoned = true;
-        this.logger.warn(
-          `Off of node ${stop.node} child ${stop.child}: no echo after ${STOP_SENDS} sends`,
-        );
-        this.saveLater();
-        this.lastStatus = undefined;
-        this.updateStatus().catch(() => {});
-      }, TIMINGS.echo);
-      return;
+        if (this.link && !this.link.closed) this.sendStop(stop);
+      }, TIMINGS.stopRetryInClick);
+      return false;
     }
-    const wait = STOP_WAITS[Math.min(stop.sends - 1, STOP_WAITS.length - 1)];
-    stop.timer = this.timers.setTimeout(() => {
-      stop.timer = undefined;
-      if (this.stops.get(`${stop.node}:${stop.child}`) !== stop) return;
-      if (this.link && !this.link.closed) this.sendStop(stop);
-      else this.ensureLink({ urgent: true });
-      this.saveLater();
-    }, wait);
-    this.saveLater();
+    stop.writes += 1;
+    stop.writtenOn = this.link;
+    stop.proofAt = this.asked + 1;
+    if (ask) this.askVersion();
+    const wait = STOP_WAITS[Math.min(stop.writes - 1, STOP_WAITS.length - 1)];
+    stop.timer = this.timers.setTimeout(() => this.stopDue(stop), wait);
+    return true;
   }
 
-  /** Every kept stop, written at once (a link just opened, /data just read). */
+  /** The resend time of a stop: sent again, or abandoned after STOP_SENDS proven sends. */
+  stopDue(stop) {
+    stop.timer = undefined;
+    if (this.stops.get(`${stop.node}:${stop.child}`) !== stop) return;
+    if (stop.sends >= STOP_SENDS) {
+      stop.abandoned = true;
+      this.logger.warn(
+        `Off of node ${stop.node} child ${stop.child}: no echo after ${STOP_SENDS} sends`,
+      );
+      this.saveLater();
+      this.lastStatus = undefined;
+      this.updateStatus().catch(() => {});
+      return;
+    }
+    // On an open link: sent again; else the link follows its waits (no storm without a click).
+    if (this.link && !this.link.closed) this.sendStop(stop);
+    else this.ensureLink();
+  }
+
+  /** Every kept stop, written at once, then one ask (a link just opened, /data just read). */
   sendDueStops() {
-    for (const stop of this.dueStops()) this.sendStop(stop);
+    let written = 0;
+    for (const stop of this.dueStops()) {
+      if (this.sendStop(stop, { ask: false })) written += 1;
+    }
+    if (written > 0) this.askVersion();
+    return written;
+  }
+
+  /** The gateway answered an ask: the stops written before it on this link were read. */
+  proveStops() {
+    let proven = false;
+    for (const stop of this.stops.values()) {
+      if (stop.writtenOn && stop.writtenOn === this.link && stop.proofAt <= this.answered) {
+        stop.writtenOn = undefined;
+        stop.sends += 1;
+        stop.sentHere = true;
+        proven = true;
+      }
+    }
+    if (proven) {
+      this.saveLater();
+      this.lastStatus = undefined;
+      this.updateStatus().catch(() => {});
+    }
+  }
+
+  /** A stop that may have reached the node: proven sent, or written on the open link. */
+  stopLeft(stop) {
+    return stop.sentHere || (stop.writtenOn !== undefined && stop.writtenOn === this.link);
   }
 
   /** The node showed the target off (echo or report) after a stop left: confirmed. */
   stopSeen(node, child) {
     const key = `${node}:${child}`;
     const stop = this.stops.get(key);
-    if (!stop || !stop.sentHere) return;
+    if (!stop || !this.stopLeft(stop)) return;
     this.endStop(key, 'confirmed');
+  }
+
+  /**
+   * The node reported itself on (its own button, a local rule) after the stop
+   * left: twice in a row, the stop is lifted and never sent again over it (a
+   * single report may have crossed the send).
+   */
+  stopContradicted(node, child) {
+    const key = `${node}:${child}`;
+    const stop = this.stops.get(key);
+    if (!stop || !this.stopLeft(stop)) return;
+    stop.onReports += 1;
+    if (stop.onReports < 2) return;
+    if (this.overridden.size >= 20) this.overridden.clear();
+    this.overridden.add(key);
+    this.endStop(key, 'overridden');
   }
 
   /** A newer command of the target left: the stop is over (never sent again over it). */
@@ -1392,16 +1487,7 @@ export class MySensorsApp {
     this.ensureLink({ urgent: true });
     const answered = new Promise((resolve) => this.versionWaiters.push({ resolve }));
     // Asked on the open link (a link opening asks it by itself).
-    if (this.link && !this.link.closed) {
-      this.send({
-        node: GATEWAY_NODE,
-        child: NODE_CHILD,
-        type: TYPE.INTERNAL,
-        ack: 0,
-        sub: I.VERSION,
-        payload: '',
-      });
-    }
+    if (this.link && !this.link.closed) this.askVersion();
     const ok = await bounded(answered, TIMINGS.test, this.timers, false);
     if (ok) {
       this.lastRx = this.monotonic();
@@ -1435,12 +1521,13 @@ export class MySensorsApp {
     for (const stop of this.stops.values()) {
       const name = `${stop.node}:${stop.child}`;
       if (stop.abandoned) abandoned.push(name);
-      else if (!stop.sentHere && stop.sends === 0) waiting.push(name);
+      else if (stop.sends === 0) waiting.push(name);
       else unconfirmed.push(name);
     }
     if (waiting.length) notes.push(T.stopsWaiting(targetList(waiting)));
     if (unconfirmed.length) notes.push(T.stopsUnconfirmed(targetList(unconfirmed)));
     if (abandoned.length) notes.push(T.stopsAbandoned(targetList(abandoned)));
+    if (this.overridden.size) notes.push(T.stopsOverridden(targetList([...this.overridden])));
     if (this.config?.invalidSafe.length)
       notes.push(T.invalidSafe(this.config.invalidSafe.join(', ')));
     if (this.idNote) notes.push(this.idNote);

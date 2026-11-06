@@ -157,8 +157,8 @@ export const T = {
   ),
   stopsWaiting: (list) =>
     both(
-      `Off kept, not sent yet (sent as soon as the gateway is connected): ${list}`,
-      `Arrêt gardé, pas encore envoyé (part dès que la passerelle est connectée) : ${list}`,
+      `Off kept, not read by the gateway yet (sent as soon as it is connected): ${list}`,
+      `Arrêt gardé, pas encore lu par la passerelle (part dès qu’elle est connectée) : ${list}`,
     ),
   stopsUnconfirmed: (list) =>
     both(
@@ -167,8 +167,13 @@ export const T = {
     ),
   stopsAbandoned: (list) =>
     both(
-      `Off sent 5 times without any echo of the node: check it (${list})`,
-      `Arrêt envoyé 5 fois sans écho du nœud : vérifiez-le (${list})`,
+      `Off read 5 times by the gateway without any echo of the node: check it (${list})`,
+      `Arrêt lu 5 fois par la passerelle sans écho du nœud : vérifiez-le (${list})`,
+    ),
+  stopsOverridden: (list) =>
+    both(
+      `Turned on again at the node after an off (reported twice): the off is not sent again (${list})`,
+      `Rallumé sur place après un arrêt (signalé deux fois) : l’arrêt n’est pas renvoyé (${list})`,
     ),
   invalidSafe: (list) =>
     both(

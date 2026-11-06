@@ -51,8 +51,11 @@ test('real clock: the gateway asked every minute; stop resends at 1.5 s, 5 s, 20
   const click = clock.monotonic();
   await app.setValue({}, { external_id: F(12, 1, 'relay') }, 0);
   const period = TIMINGS.keepalive;
-  await waitUntil(() => asks.length >= 3, 'three asks', (3 * period) / SPEED + 3000);
-  const gaps = asks.slice(1).map((v, i) => v - asks[i]);
+  // The keepalive asks only (each write of the stop is followed by its own ask).
+  const keepalives = () => asks.filter((at) => !offs.some((o) => at >= o && at - o < 100));
+  await waitUntil(() => keepalives().length >= 3, 'three keepalives', (3 * period) / SPEED + 3000);
+  const kept = keepalives();
+  const gaps = kept.slice(1).map((v, i) => v - kept[i]);
   for (const gap of gaps.slice(1)) {
     assert.ok(gap >= period * 0.98 && gap <= period * 1.5, `gap ${Math.round(gap)} ms`);
   }

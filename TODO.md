@@ -56,23 +56,40 @@ sockets.
   changed is kept (never a lost feature); turning on through it is then
   refused ("not declared safe"), turning off still leaves.
 - **Commands**: sent with the echo flag (ack=1); confirmed only by the exact
-  echo (node, child, type, payload) or by the report of the node; else "sent,
-  without confirmation" after 3.5 s. MySensors has no read-back: the echo
+  echo (node, child, type, payload), never by a report of the node (review
+  r1, M1); else "sent, without confirmation" after 3.5 s. MySensors has no read-back: the echo
   proves the node received the command, so only the reports of the node
   (ack 0) are published as states, never an echo. Nothing is queued: a command leaves now
   (no await between its checks and its send) or is refused ("nothing sent").
   Brightness: an integer 0-100; 0 is an off (V_STATUS 0).
 - **Stops** (off, brightness 0): independent of the declaration, the
-  configuration, /data and the gateway being verified; sent at once on the
+  configuration, /data and the gateway being verified; written at once on the
   open link (otherwise the link is opened at once and all kept stops are
-  written first); resent after 1.5 s, 5 s, 20 s, 1 min; abandoned (status)
-  after 5 effective sends without echo; a new click gives the whole budget
-  again. Only a write on an open link counts as a send. Confirmed by an echo
-  or a report of 0 arriving after a send of this process. Kept in /data
-  (route, node, child, count; an unreadable count is 0; no age limit); sent
-  again after a restart before getConfig() through the route of /data (TCP,
-  or MQTT without credentials: no secret in /data). A newer command of the
-  target that actually left cancels it.
+  written first), each write followed by a version request. **A send counts
+  only when proven** (review r1, B1): the gateway answered, on the same link,
+  a version request written after the stop (TCP and MQTT keep the order), or
+  the node echoed it; a write on a link that closes before (an ESP8266
+  gateway with its client slot taken: accept then close) counts nothing, so
+  such a stop is never abandoned and leaves on the next link. Resent after
+  1.5 s, 5 s, 20 s, 1 min; abandoned (status) after 5 proven sends without
+  echo; a new click gives the whole budget again. A resend due while the link
+  is down follows the waits of the link (no connection without a click).
+  Confirmed by an echo or a report of 0 after it left. Lifted, never sent
+  again, by a newer command of the target that actually left, or by two
+  reports of the node showing it on after it left (review r1, I1: someone
+  turned it on again at the node; one report may cross the send). Kept in
+  /data (route, node, child, proven count; an unreadable count is 0; no age
+  limit); sent again after a restart before getConfig() through the route of
+  /data (TCP, or MQTT without credentials: no secret in /data).
+- **Link attempts** (review r1, B2, I2): a configuration saved during a slow
+  attempt to another gateway opens the new link as soon as the stale attempt
+  ends (whatever its outcome); an attempt to the same gateway is kept. A
+  click (stop) during an attempt that fails tries once more at once, then the
+  waits resume.
+- **Presented type**: kept in memory only; after a restart the declaration is
+  the guard until the node presents itself again (review r1, M3, documented).
+- **I_DISCOVER** when the gateway says it is ready: once a minute at most
+  (review r1, M2).
 - **Freshness**: values published when they come (no `created_at`), measurements
   of one feature spaced by 5 s, a value waiting more than 2 min dropped; a
   reconnection to Gladys clears the publication caches and republishes
@@ -93,7 +110,7 @@ sockets.
   failed: nothing given); an unused id given again after 5 min; 10 unused at
   most; option `assign_node_ids` (on by default).
 - **Answers to the nodes**: I_CONFIG "M", I_TIME (local time, seconds), at
-  most one of each per node every 2 s; I_DISCOVER broadcast when the gateway
+  most one of each per node every 2 s; I_DISCOVER broadcast (once a minute at most) when the gateway
   is ready; a Scan asks the known silent nodes to present themselves
   (I_PRESENTATION, 250 ms apart, 50 at most, once a minute).
 - **Refused MQTT credentials** (CONNACK 4, 5, 134, 135, 138, or a CONNECT

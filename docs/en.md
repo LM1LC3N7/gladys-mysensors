@@ -63,34 +63,51 @@ light (on/off and brightness). After changing the list, scan and update the
 device in the Discovery tab. Heaters and sprinklers are never commanded.
 
 A command is sent with the echo flag of MySensors: it is confirmed when the
-node echoes it (its radio received it), or when the node reports the new
-state. Without an echo within 3.5 s it is "sent, without confirmation". The
+node echoes it (its radio received it); a report of the node is not a
+confirmation of the command. Without an echo within 3.5 s it is "sent, without confirmation". The
 state shown in Gladys is the one the node reports (an echo only proves the
 node received the command): a sketch that never sends its state back leaves
 the state unchanged in Gladys.
 
 Turning on (or a brightness above 0) is refused, and nothing is sent, when:
 the configuration is not read or not valid; the pair is not declared safe;
-the node now presents that child as another kind of sensor; the gateway is
-not connected.
+the node presented that child as another kind of sensor since the
+integration started (a presentation heard before a restart is not kept: the
+declaration is the guard until the node presents itself again); the gateway
+is not connected.
 
 ## Turning off
 
 Turning off a relay or a light (or a brightness of 0) is never refused for a
 declaration, an option or a configuration not read yet, and never waits for
-the disk. It is sent at once when the gateway is connected; otherwise Gladys
-connects at once and it leaves first. Not echoed by the node, it is sent
-again after 1.5 s, 5 s, 20 s and 1 min (5 sends), then reported as abandoned
-in the status until you click again. It is kept on disk until the node
-confirms it, and sent again after a restart, even before the configuration
-is read (Ethernet gateway, or MQTT broker without credentials). A newer
-command of the same target that actually left cancels its resends.
+the disk. It is written at once when the gateway is connected, followed by a
+request for the version of the gateway: a send counts only once the gateway
+answers that request on the same connection (it read the off before it) or
+the node echoes the off. Otherwise Gladys connects at once, and it leaves
+first; a click during a connection attempt that fails tries once more at
+once.
+
+Not echoed by the node, it is sent again after 1.5 s, 5 s, 20 s and 1 min.
+After 5 sends read by the gateway without any echo, it is reported as
+abandoned in the status until you click again. A write on a connection that
+closes before the gateway answered (a gateway restarting, or an ESP8266
+gateway whose single client slot is taken) does not count: such an off is
+never abandoned, and is sent again on the next connection.
+
+It is kept on disk until the node confirms it (echo, or a report of off after
+the send), and sent again after a restart, even before the configuration is
+read (Ethernet gateway, or MQTT broker without credentials). It is lifted
+without being sent again when a newer command of the same target actually
+left, or when the node reports itself on twice after the off left (someone
+turned it on again at the node: a single report may have crossed the off, it
+does not count); the status then says so.
 
 It cannot leave while the gateway (or the broker) is unreachable, while the
-broker refuses the credentials, or while the configuration is not valid: it is then kept and leaves first as soon
-as the gateway is back, new credentials are saved or the test button
-succeeds. Its fate is shown in the status: kept, sent and not confirmed yet,
-or abandoned.
+broker refuses the credentials, or while the configuration is not valid: it
+is then kept and leaves first as soon as the gateway is back, new
+credentials are saved or the test button succeeds. Its fate is shown in the
+status: kept (not read by the gateway yet), sent and not confirmed yet,
+abandoned, or turned on again at the node.
 
 ## Node ids
 

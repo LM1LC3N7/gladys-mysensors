@@ -72,36 +72,53 @@ la liste, relancez la découverte et mettez à jour l'appareil dans l'onglet
 Découverte. Chauffages et arrosages ne sont jamais commandés.
 
 Une commande part avec le drapeau d'écho de MySensors : elle est confirmée
-quand le nœud la renvoie en écho (sa radio l'a reçue), ou quand le nœud
-signale son nouvel état. Sans écho en 3,5 s, elle est « envoyée, sans
+quand le nœud la renvoie en écho (sa radio l'a reçue) ; un état signalé par
+le nœud ne confirme pas la commande. Sans écho en 3,5 s, elle est « envoyée, sans
 confirmation ». L'état affiché dans Gladys est celui que le nœud signale (un
 écho prouve seulement que le nœud a reçu la commande) : un sketch qui ne
 renvoie jamais son état laisse l'état inchangé dans Gladys.
 
 Allumer (ou une luminosité au-dessus de 0) est refusé, et rien n'est envoyé,
 quand : la configuration n'est pas lue ou pas valide ; le couple n'est pas
-déclaré sûr ; le nœud présente maintenant ce capteur comme un autre type ; la
+déclaré sûr ; le nœud a présenté ce capteur comme un autre type depuis le
+démarrage de l'intégration (une présentation entendue avant un redémarrage
+n'est pas gardée : la déclaration reste la garde tant que le nœud ne s'est
+pas présenté de nouveau) ; la
 passerelle n'est pas connectée.
 
 ## Éteindre
 
 Éteindre un relais ou une lumière (ou une luminosité de 0) n'est jamais
 refusé pour une déclaration, une option ou une configuration pas encore lue,
-et n'attend jamais le disque. L'arrêt part tout de suite si la passerelle est
-connectée ; sinon Gladys s'y connecte aussitôt et il part en premier. Sans
-écho du nœud, il est renvoyé après 1,5 s, 5 s, 20 s et 1 min (5 envois), puis
-signalé comme abandonné dans le statut jusqu'à un nouveau clic. Il est gardé
-sur le disque jusqu'à ce que le nœud le confirme, et renvoyé après un
-redémarrage, même avant la lecture de la configuration (passerelle Ethernet,
-ou broker MQTT sans identifiants). Une commande plus récente de la même cible
-réellement partie annule ses renvois.
+et n'attend jamais le disque. L'arrêt est écrit tout de suite si la
+passerelle est connectée, suivi d'une demande de version de la passerelle :
+un envoi ne compte qu'une fois que la passerelle a répondu à cette demande
+sur la même connexion (elle a lu l'arrêt avant) ou que le nœud a renvoyé
+l'arrêt en écho. Sinon Gladys se connecte aussitôt, et il part en premier ;
+un clic pendant une tentative de connexion qui échoue relance un essai
+aussitôt.
+
+Sans écho du nœud, il est renvoyé après 1,5 s, 5 s, 20 s et 1 min. Après 5
+envois lus par la passerelle sans aucun écho, il est signalé comme abandonné
+dans le statut jusqu'à un nouveau clic. Une écriture sur une connexion fermée
+avant la réponse de la passerelle (une passerelle qui redémarre, ou une
+passerelle ESP8266 dont l'unique place client est prise) ne compte pas : un
+tel arrêt n'est jamais abandonné, et repart à la connexion suivante.
+
+Il est gardé sur le disque jusqu'à ce que le nœud le confirme (écho, ou état
+éteint signalé après l'envoi), et renvoyé après un redémarrage, même avant la
+lecture de la configuration (passerelle Ethernet, ou broker MQTT sans
+identifiants). Il est levé sans être renvoyé quand une commande plus récente
+de la même cible est réellement partie, ou quand le nœud se signale allumé
+deux fois après le départ de l'arrêt (quelqu'un l'a rallumé sur place : un
+seul état a pu croiser l'arrêt, il ne compte pas) ; le statut le dit alors.
 
 Il ne peut pas partir tant que la passerelle (ou le broker) est injoignable,
 que le broker refuse les identifiants ou que la configuration n'est pas
 valide : il est alors gardé et part en premier dès que la passerelle revient,
 que de nouveaux identifiants sont enregistrés ou que le bouton de test
-réussit. Le statut dit où il en est : gardé, envoyé et pas encore confirmé,
-ou abandonné.
+réussit. Le statut dit où il en est : gardé (pas encore lu par la
+passerelle), envoyé et pas encore confirmé, abandonné, ou rallumé sur place.
 
 ## Ids des nœuds
 

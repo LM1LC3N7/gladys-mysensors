@@ -29,16 +29,16 @@ export const MUTANTS = [
   [
     'stop confirmed only after a send',
     'src/app.js',
-    'if (!stop || !stop.sentHere) return;',
-    'if (!stop) return;',
+    "if (!stop || !this.stopLeft(stop)) return;\n    this.endStop(key, 'confirmed');",
+    "if (!stop) return;\n    this.endStop(key, 'confirmed');",
   ],
   ['newer command cancels the stop', 'src/app.js', '    this.cancelStop(target);\n', ''],
   ['five sends', 'src/app.js', 'export const STOP_SENDS = 5;', 'export const STOP_SENDS = 4;'],
   [
     'kept stops sent when the link opens',
     'src/app.js',
-    '    this.sendDueStops();\n    this.send(',
-    '    this.send(',
+    'if (this.sendDueStops() === 0) this.askVersion();',
+    'this.askVersion();',
   ],
   [
     'stop via /data route before config',
@@ -49,8 +49,8 @@ export const MUTANTS = [
   [
     'click never overwritten by /data',
     'src/app.js',
-    'if (!this.stops.has(key)) {\n          this.stops.set(key, {',
-    'if (true) {\n          this.stops.set(key, {',
+    'if (!this.stops.has(key)) {\n          this.stops.set(key, newStop(',
+    'if (true) {\n          this.stops.set(key, newStop(',
   ],
   // Commands.
   [
@@ -221,6 +221,82 @@ export const MUTANTS = [
     'src/app.js',
     '.filter((e) => wall - e.at >= TIMINGS.idReuse || e.at > wall)',
     '.filter(() => false)',
+  ],
+  // Review r1.
+  ['B1 proof after the ask', 'src/app.js', 'stop.proofAt <= this.answered', 'true'],
+  [
+    'B1 a write is not a send',
+    'src/app.js',
+    '    stop.writes += 1;\n    stop.writtenOn = this.link;',
+    '    stop.writes += 1;\n    stop.sends += 1;\n    stop.sentHere = true;\n    stop.writtenOn = this.link;',
+  ],
+  [
+    'B1 resend while down follows the waits',
+    'src/app.js',
+    '    else this.ensureLink();\n  }',
+    '    else this.ensureLink({ urgent: true });\n  }',
+  ],
+  [
+    'B2 stale failed attempt relinks',
+    'src/app.js',
+    '        if (!this.closed) this.relinkNow = true;\n        return;',
+    '        return;',
+  ],
+  [
+    'B2 stale opened attempt relinks',
+    'src/app.js',
+    "      link.close('stale');\n      if (!this.closed) this.relinkNow = true;",
+    "      link.close('stale');",
+  ],
+  [
+    'I1 two reports',
+    'src/app.js',
+    'if (stop.onReports < 2) return;',
+    'if (stop.onReports < 1) return;',
+  ],
+  [
+    'I1 reports after the off only',
+    'src/app.js',
+    'if (!stop || !this.stopLeft(stop)) return;\n    stop.onReports',
+    'if (!stop) return;\n    stop.onReports',
+  ],
+  ['I2 click during an attempt', 'src/app.js', 'if (urgent) this.urgentAfterAttempt = true;', ''],
+  [
+    'M2 discover spaced',
+    'src/app.js',
+    'this.monotonic() - this.lastDiscoverAt >= TIMINGS.scan',
+    'true',
+  ],
+  ['M4 stale link closed', 'src/app.js', "      link.close('stale');\n", ''],
+  [
+    'M4 old link muted',
+    'src/app.js',
+    'if (!holder.link || this.link !== holder.link) return;',
+    'if (!holder.link) return;',
+  ],
+  [
+    'M4 TCP connect timeout',
+    'src/tcp.js',
+    '    }, TIMINGS.connectTimeout);',
+    '    }, 10 * TIMINGS.connectTimeout);',
+  ],
+  [
+    'M4 node 255 ignored',
+    'src/app.js',
+    'if (msg.node > NODE_MAX && !(msg.type === TYPE.INTERNAL && msg.sub === I.ID_REQUEST)) return;',
+    '',
+  ],
+  [
+    'M4 on needs config',
+    'src/app.js',
+    'if (!this.config || this.config.problem) throw new CommandError(ERRORS.noConfig);',
+    '',
+  ],
+  [
+    'M4 keepalive after answer',
+    'src/app.js',
+    '          // An answer (asked by the test button too) counts: the next ask a full minute later.\n          this.scheduleKeepalive();',
+    '',
   ],
   // Configuration.
   [
