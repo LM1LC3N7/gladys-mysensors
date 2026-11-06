@@ -19,7 +19,9 @@
 // 1.5 s, 5 s, 20 s and 1 min (5 sends), then reported as abandoned. Only an
 // effective send counts. Kept in /data (route, node, child, count) until
 // confirmed, sent again after a restart before the configuration is read.
-// A command of the same target that actually left afterwards cancels it.
+// A command of the same target that actually left afterwards cancels it; two
+// reports of on lift it only when the target was known off before the click
+// (its last report said off, and no on of Gladys is pending: see onAt).
 //
 // Clock: the monotonic clock for every wait and decision; the wall clock
 // only for what /data keeps (ids handed out, the time of the next try after
@@ -86,7 +88,10 @@ const newStop = (node, child, sends) => ({
   /** Writes of this process since the click (the resend schedule). */
   writes: 0,
   sentHere: false,
+  /** The link of its last write not proven yet (cleared by the proof). */
   writtenOn: undefined,
+  /** The link of its last write, proven or not (the status: written on the open link). */
+  wroteOn: undefined,
   proofAt: 0,
   onReports: 0,
   /** When its last sends were proven (withdrawn if an unasked answer follows). */
@@ -172,6 +177,8 @@ export class MySensorsApp {
     this.unanswered = 0;
     this.authUntil = undefined;
     this.authTimer = undefined;
+    /** The refusal kept in /data was settled by this process (see loadMemory). */
+    this.authSettled = false;
     this.keepaliveTimer = undefined;
     this.resetSession();
     /** node id -> what was heard of it (presentations, values, battery). */
@@ -190,6 +197,12 @@ export class MySensorsApp {
     this.lastDiscoverAt = -Infinity;
     /** "node:child" of the stops lifted by the node turned on again in place. */
     this.overridden = new Map();
+    /**
+     * "node:child" -> when an on (or a brightness) of Gladys left for it, until
+     * a report of the node comes late enough to show the state after it
+     * (bounded by the ids: 255 nodes x 255 children).
+     */
+    this.onAt = new Map();
     this.urgentAfterAttempt = false;
     this.askSeq = 0;
     this.asks = [];
@@ -300,17 +313,9 @@ export class MySensorsApp {
     this.config = next;
     if (fromUser) {
       this.liftAuth();
-    } else if (this.memory.auth.failures > 0 && !previous) {
-      // A restart: one try at once (a password changed meanwhile is always
-      // tried); the count of refusals goes on only if the refused pair is
-      // still the one configured (then a new refusal waits longer).
-      const same =
-        next.transport === TRANSPORTS.MQTT &&
-        this.memory.auth.salt &&
-        this.memory.auth.mark ===
-          credentialsMark(this.memory.auth.salt, next.username, next.password);
-      if (same) this.tryAuthOnce();
-      else this.liftAuth();
+    } else if (this.memory.auth.failures > 0) {
+      // A restart, or a configuration read again on a reconnection to Gladys.
+      this.refusedPairCheck(next);
     }
     const route = routeOf(next);
     if (JSON.stringify(route) !== JSON.stringify(this.memory.route)) {
@@ -422,7 +427,11 @@ export class MySensorsApp {
       for (const entry of this.memory.ids) {
         if (!loaded.ids.some((e) => e.id === entry.id)) loaded.ids.push(entry);
       }
-      if (this.memory.auth.failures > 0) loaded.auth = this.memory.auth;
+      // Refused credentials: what this process settled meanwhile (a connection
+      // accepted, a refusal, new credentials, the test button, another pair
+      // configured) is never overwritten by the file.
+      const stale = this.authSettled && (loaded.auth.failures > 0 || this.memory.auth.failures > 0);
+      if (this.authSettled) loaded.auth = this.memory.auth;
       this.memory = loaded;
       this.memoryState = 'ok';
       this.lastStatus = undefined;
@@ -432,9 +441,10 @@ export class MySensorsApp {
           this.stops.set(key, newStop(s.node, s.child, s.sends));
         }
       }
-      if (loaded.auth.failures > 0 && loaded.auth.until > 0) {
-        this.armAuth(loaded.auth.until - this.now());
-      }
+      if (stale) this.saveLater();
+      // Read after the configuration: compared with it now (before it, the
+      // configuration does it when it comes).
+      else if (loaded.auth.failures > 0 && this.config) this.refusedPairCheck(this.config);
     })().finally(() => {
       this.memoryLoading = undefined;
     });
@@ -602,9 +612,13 @@ export class MySensorsApp {
     }
     this.reason = undefined;
     this.unanswered = 0;
-    if (cfg.transport === TRANSPORTS.MQTT && this.memory.auth.failures > 0) {
-      this.liftAuth();
-      this.saveLater();
+    if (cfg.transport === TRANSPORTS.MQTT) {
+      // Accepted: no refusal applies any more, even one /data gives later.
+      this.authSettled = true;
+      if (this.memory.auth.failures > 0) {
+        this.liftAuth();
+        this.saveLater();
+      }
     }
     // Every kept stop first, then the version of the gateway (its answer proves
     // it alive, and that it read the stops).
@@ -678,6 +692,7 @@ export class MySensorsApp {
   /** The broker refused the credentials: no try before the spaced wait (persisted). */
   async onRefused(cfg, reason) {
     this.logger.warn(`MQTT broker refused the connection: ${reason}`);
+    this.authSettled = true;
     const failures = this.memory.auth.failures + 1;
     const wait = authWait(failures);
     const salt = this.memory.auth.salt ?? randomBytes(16).toString('hex');
@@ -707,15 +722,27 @@ export class MySensorsApp {
     );
   }
 
-  /** One try now, the count of refusals kept (after a restart). */
-  tryAuthOnce() {
-    if (this.authTimer) this.timers.clearTimeout(this.authTimer);
-    this.authTimer = undefined;
-    this.authUntil = undefined;
+  /**
+   * A refusal kept (in /data or in this process) against the configuration
+   * read (at start, on a reconnection to Gladys, or when /data is read after
+   * it): another pair than the refused one is tried at once (a password
+   * changed meanwhile is always tried), the count of refusals starts over;
+   * the same pair keeps its count (a new refusal waits longer) and its wait,
+   * if this process armed one. No wait is ever armed from the file: after a
+   * restart, one try at once in any case.
+   */
+  refusedPairCheck(config) {
+    const same =
+      config.transport === TRANSPORTS.MQTT &&
+      this.memory.auth.salt &&
+      this.memory.auth.mark ===
+        credentialsMark(this.memory.auth.salt, config.username, config.password);
+    if (!same) this.liftAuth();
   }
 
   /** New credentials, the test button or an accepted connection: the next try is now. */
   liftAuth() {
+    this.authSettled = true;
     if (this.authTimer) this.timers.clearTimeout(this.authTimer);
     this.authTimer = undefined;
     this.authUntil = undefined;
@@ -870,8 +897,12 @@ export class MySensorsApp {
       });
       if (!known && !info.children.has(msg.child)) this.scheduleDevices();
     }
-    // The note "turned on again at the node" goes with the next report of the target.
-    if (msg.ack === 0 && msg.sub === V.STATUS) this.overridden.delete(`${msg.node}:${msg.child}`);
+    if (msg.ack === 0 && msg.sub === V.STATUS) {
+      const target = `${msg.node}:${msg.child}`;
+      this.reportAfterOn(target);
+      // The note "turned on again at the node" goes when the node reports it off (or 10 min).
+      if (msg.payload === '0') this.overridden.delete(target);
+    }
     if (msg.sub === V.STATUS && msg.payload === '0') this.stopSeen(msg.node, msg.child);
     else if (msg.ack === 0 && msg.sub === V.STATUS && msg.payload === '1') {
       // V_STATUS only: the V_STATUS + V_PERCENTAGE pair of one change is one reading.
@@ -884,6 +915,16 @@ export class MySensorsApp {
       return;
     }
     this.queueValue(info, msg.child, msg.sub, msg.payload);
+  }
+
+  /**
+   * A report of the target: it shows the state after the last on of Gladys
+   * only when it came later than an echo could (TIMINGS.echo): sooner, the
+   * node may have sent it before the on reached it (crossed).
+   */
+  reportAfterOn(key) {
+    const at = this.onAt.get(key);
+    if (at !== undefined && this.monotonic() - at > TIMINGS.echo) this.onAt.delete(key);
   }
 
   onInternal(msg) {
@@ -1265,6 +1306,7 @@ export class MySensorsApp {
       echo.cancel();
       throw new CommandError(ERRORS.offline);
     }
+    this.commandLeft(parsed.node, parsed.child);
     // A newer command of the target left: the stop is not sent again over it.
     this.cancelStop(target);
     return (await echo.promise) ? 'confirmed' : 'unconfirmed';
@@ -1292,6 +1334,16 @@ export class MySensorsApp {
         entry.resolve(false);
       },
     };
+  }
+
+  /**
+   * An on (or a brightness) of Gladys left for the target: the reports of the
+   * node no longer tell its state (the on may have been applied, no report
+   * says so) until one comes after it (see onSet): the state before a later
+   * off is unknown meanwhile.
+   */
+  commandLeft(node, child) {
+    this.onAt.set(`${node}:${child}`, this.monotonic());
   }
 
   removeWaiter(entry) {
@@ -1333,8 +1385,10 @@ export class MySensorsApp {
     stop.writes = 0;
     stop.onReports = 0;
     stop.abandoned = false;
-    // The state before the click: the last report of the node (unknown if none).
-    stop.departure = this.nodes.get(node)?.values.get(`${child}:${V.STATUS}`)?.payload;
+    // The state before the click: the last report of the node; unknown if none,
+    // or if an on of Gladys left and no report came after it.
+    const last = this.nodes.get(node)?.values.get(`${child}:${V.STATUS}`);
+    stop.departure = last && !this.onAt.has(key) ? last.payload : undefined;
     this.overridden.delete(key);
     if (stop.timer) this.timers.clearTimeout(stop.timer);
     stop.timer = undefined;
@@ -1396,6 +1450,7 @@ export class MySensorsApp {
     }
     stop.writes += 1;
     stop.writtenOn = this.link;
+    stop.wroteOn = this.link;
     stop.proofAt = this.askSeq + 1;
     if (ask) this.askVersion();
     const wait = STOP_WAITS[Math.min(stop.writes - 1, STOP_WAITS.length - 1)];
@@ -1507,10 +1562,12 @@ export class MySensorsApp {
 
   /**
    * The node reported itself on after the stop left. Only when it was known
-   * off before the click is that a change made elsewhere (its own button):
-   * read twice (one report may have crossed the send), the stop is lifted and
-   * never sent again over it. On or unknown before: not a change, the stop
-   * goes on (sent again, then abandoned with the status).
+   * off before the click (its last report said off and no on of Gladys is
+   * pending, see onAt) is that a change made elsewhere (its own button): read twice
+   * (one report may have crossed the send), the stop is lifted and never sent
+   * again over it. On or unknown before: not a change, the stop goes on (sent
+   * again, then abandoned with the status) until the node reports it off
+   * (confirmed: an on made at the node afterwards is never turned off).
    */
   stopContradicted(node, child) {
     const key = `${node}:${child}`;
@@ -1583,24 +1640,28 @@ export class MySensorsApp {
     if (this.memoryState === 'unreadable') notes.push(T.dataUnreadable);
     else if (!this.writable) notes.push(T.dataUnwritable);
     const waiting = [];
+    const written = [];
     const unconfirmed = [];
     const abandoned = [];
     for (const stop of this.stops.values()) {
       const name = `${stop.node}:${stop.child}`;
       if (stop.abandoned) abandoned.push(name);
-      else if (stop.sends === 0) waiting.push(name);
-      else unconfirmed.push(name);
+      else if (stop.sends > 0) unconfirmed.push(name);
+      // Written on the open link, not proven read yet (no answer, or answers nobody asked for).
+      else if (stop.wroteOn !== undefined && stop.wroteOn === this.link) written.push(name);
+      else waiting.push(name);
     }
+    const echoOnly =
+      this.unaskedAt !== undefined && this.monotonic() - this.unaskedAt < TIMINGS.unaskedQuiet;
     if (waiting.length) notes.push(T.stopsWaiting(targetList(waiting)));
+    if (written.length) notes.push(T.stopsWritten(targetList(written), echoOnly));
     if (unconfirmed.length) notes.push(T.stopsUnconfirmed(targetList(unconfirmed)));
     if (abandoned.length) notes.push(T.stopsAbandoned(targetList(abandoned)));
     // Until the next report of the target, or 10 min.
     for (const [key, at] of this.overridden) {
       if (this.monotonic() - at > TIMINGS.overriddenNote) this.overridden.delete(key);
     }
-    if (this.unaskedAt !== undefined && this.monotonic() - this.unaskedAt < TIMINGS.unaskedQuiet) {
-      notes.push(T.unasked);
-    }
+    if (echoOnly) notes.push(T.unasked);
     if (this.overridden.size) {
       notes.push(T.stopsOverridden(targetList([...this.overridden.keys()])));
     }

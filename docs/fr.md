@@ -25,6 +25,16 @@ n'importe qui sur votre réseau peut parler à la passerelle. À utiliser sur un
 réseau de confiance seulement. Le mot de passe MQTT est gardé par Gladys dans
 sa base, jamais réaffiché, envoyé seulement à votre broker.
 
+Le protocole n'a pas non plus d'identifiant de requête : une réponse de la
+passerelle ne peut pas être reliée à la demande de Gladys qui l'a suscitée.
+Un appareil de votre réseau (ou un client de votre broker) qui forge la
+réponse de la passerelle juste après chaque demande de Gladys, pendant que
+la vraie passerelle est absente, peut faire compter un arrêt comme lu par la
+passerelle : après 5 réponses de ce genre, il est signalé abandonné dans le
+statut alors que la passerelle ne l'a jamais lu. Les réponses arrivées sans
+demande sont détectées (voir Éteindre) ; un tel attaquant pourrait aussi
+bien envoyer lui-même des commandes à vos nœuds.
+
 ## Mise en route
 
 1. Choisissez le type de passerelle.
@@ -113,21 +123,31 @@ Il est gardé sur le disque jusqu'à ce que le nœud le confirme (écho, ou éta
 éteint signalé après l'envoi), et renvoyé après un redémarrage, même avant la
 lecture de la configuration (passerelle Ethernet, ou broker MQTT sans
 identifiants). Il est levé sans être renvoyé quand une commande plus récente
-de la même cible est réellement partie, ou quand le nœud, signalé éteint
+de la même cible est réellement partie, ou quand le nœud, connu éteint
 avant le clic, se signale allumé deux fois après le départ de l'arrêt
 (quelqu'un l'a rallumé sur place : un seul état a pu croiser l'arrêt, et la
 paire marche/niveau d'un variateur compte pour un état) ; le statut le dit
-alors jusqu'au prochain état signalé de la cible (10 minutes au plus).
-Quand le nœud était allumé, ou son état inconnu, avant le clic, un état
-allumé n'est pas un changement fait ailleurs : l'arrêt est renvoyé, puis
-abandonné.
+alors jusqu'à ce que le nœud se signale éteint, un nouveau clic sur lui, ou
+10 minutes. Connu éteint veut dire : son dernier état signalé avant le clic
+était éteint et, si Gladys l'a allumé (ou a réglé une luminosité), un état
+est arrivé plus de 3,5 s après cet allumage (un état plus tôt a pu le
+croiser). Quand le nœud était allumé avant le clic, ou son état inconnu
+(jamais signalé, ou un allumage de Gladys sans état arrivé ainsi après : il
+a pu s'appliquer), un état allumé n'est pas un changement fait
+ailleurs : l'arrêt est renvoyé jusqu'à ce que le nœud le renvoie en écho ou
+se signale éteint (il est alors confirmé, et un allumage fait sur place
+ensuite est respecté), sinon il est abandonné après 5 envois lus par la
+passerelle.
 
 Il ne peut pas partir tant que la passerelle (ou le broker) est injoignable,
 que le broker refuse les identifiants ou que la configuration n'est pas
 valide : il est alors gardé et part en premier dès que la passerelle revient,
 que de nouveaux identifiants sont enregistrés ou que le bouton de test
-réussit. Le statut dit où il en est : gardé (pas encore lu par la
-passerelle), envoyé et pas encore confirmé, abandonné, ou rallumé sur place.
+réussit. Le statut dit où il en est : gardé (pas encore écrit : la
+passerelle n'est pas connectée), écrit et pas encore compté comme lu
+(jusqu'à la réponse de la passerelle ou, tant que des réponses arrivent sans
+demande, jusqu'à l'écho du nœud), envoyé et pas encore confirmé, abandonné,
+ou rallumé sur place.
 
 ## Ids des nœuds
 

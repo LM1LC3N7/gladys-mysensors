@@ -76,17 +76,30 @@ sockets.
   is down follows the waits of the link (no connection without a click).
   Confirmed by an echo or a report of 0 after it left. Lifted, never sent
   again, by a newer command of the target that actually left, or by two
-  reports of the node showing it on after it left, only when its last report
-  before the click was off (review r1 I1, r2 B1: on or unknown before is not
-  a change made elsewhere; one V_STATUS report per change, the V_PERCENTAGE
-  of a dimmer not counted). The note stays until the next report of the
-  target, 10 min at most. A send is proven by the answer to a version ask
+  reports of the node showing it on after it left, only when it was known off
+  before the click: its last report said off and, if an on (or brightness)
+  of Gladys left for it, a report came more than 3.5 s (the echo time) after
+  that on; a sooner one may have crossed it (review r1 I1, r2 B1, r3 I1: on
+  or unknown before is not a change made elsewhere; one V_STATUS report per
+  change, the V_PERCENTAGE of a dimmer not counted). Unknown before: reports
+  of on never lift it; it goes on until the node echoes it or reports it off
+  (confirmed; an on made at the node afterwards is kept), else abandoned. An
+  echo is never a state (never the state before a click, never settles an
+  on, never republished). The note stays until the node reports the target off, a new
+  click, or 10 min (review r3 M1). The status tells a stop kept (link down)
+  from one written on the open link and not proven yet (review r3 M4). A
+  send is proven by the answer to a version ask
   written after it: asks queued per link, each answer matched to the oldest
   one waiting, asks older than 10 s forgotten, unasked answers ignored and, for a
   minute after one, no answer proves a send (only an echo; status note):
   another controller of the gateway or a forged answer could otherwise pop
   an ask of Gladys; the proofs of the 10 s before such an answer are
-  withdrawn (review r2 I1). Kept in
+  withdrawn (review r2 I1). **Residual limit** (review r3 M2): the protocol
+  has no request id, so a forger on the network or the broker that answers
+  each version ask of Gladys at once, while the gateway is away (never an
+  unasked answer), makes 5 proofs and the stop is abandoned (status: read 5
+  times by the gateway); accepted, such an attacker could as well send
+  commands (docs, Security). Kept in
   /data (route, node, child, proven count; an unreadable count is 0; no age
   limit); sent again after a restart before getConfig() through the route of
   /data (TCP, or MQTT without credentials: no secret in /data).
@@ -128,8 +141,15 @@ sockets.
   refused pair (never the password, never a usable hash). After a restart
   one try at once (a password changed meanwhile is always tried, review r2
   I2); if refused again, the count goes on when the mark matches (a longer
-  wait), else starts over. Saving the
-  configuration or the test button always tries at once. A broker answering
+  wait), else starts over; no wait is ever armed from the file alone. A
+  configuration read again on a reconnection to Gladys with another pair
+  than the refused one is tried at once; the same pair keeps its wait (no
+  try). /data read late at start (past its 2 s bound): what this process
+  settled meanwhile (a connection accepted, a refusal, new credentials, the
+  test button) wins over the refusal of the file, which is then written
+  over; nothing settled yet, the file is compared with the configuration
+  when it is read (review r3 M3). Saving the configuration or the test
+  button always tries at once. A broker answering
   1 or 132 is used in MQTT 3.1.1 (status).
 - **getConfig()** failing in `connected`: tried again after 5 s, 15 s, then
   every minute, for life, with the status.

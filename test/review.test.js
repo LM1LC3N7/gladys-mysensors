@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// The points of review r1: each correction has its test (a mutant of it
+// The points of reviews r1 to r3: each correction has its test (a mutant of it
 // fails here, never hangs).
 // -----------------------------------------------------------------------------
 
@@ -449,7 +449,7 @@ test('r2 B1: a dimmer pair V_STATUS + V_PERCENTAGE is one reading', async (t) =>
   assert.equal(ctx.app.stops.get('13:1').onReports, 1);
 });
 
-test('r2 M1: the note "turned on again" goes with the next report, or after 10 min', async (t) => {
+test('r3 M1: the note "turned on again" stays on reports of on; it goes with a report of off, or after 10 min', async (t) => {
   const ctx = await setup(t, { gateway: { echo: false } });
   await live(ctx);
   for (const target of ['12;1', '13;1']) {
@@ -460,8 +460,18 @@ test('r2 M1: the note "turned on again" goes with the next report, or after 10 m
   await answer(ctx, command(ctx, F(13, 1, 'light'), 0));
   for (const target of ['12;1', '12;1', '13;1', '13;1']) ctx.gw.push(`${target};1;0;2;1`);
   await until(ctx.clock, () => ctx.app.overridden.size === 2, 'two lifted', { step: 1 });
-  ctx.gw.push('12;1;1;0;2;1');
-  await until(ctx.clock, () => !ctx.app.overridden.has('12:1'), 'next report', { step: 1 });
+  // The node keeps reporting itself on (a sketch that reports every few seconds): the note stays.
+  for (let i = 0; i < 3; i += 1) {
+    ctx.gw.push('12;1;1;0;2;1');
+    await ctx.clock.advance(3000);
+    await settle(5);
+  }
+  assert.equal(ctx.app.nodes.get(12).values.get('1:2').payload, '1', 'the reports were read');
+  assert.ok(ctx.app.overridden.has('12:1'), 'a report of on keeps the note');
+  await ctx.app.updateStatus();
+  assert.match(status(ctx.gladys), /Turned on again at the node .*12:1/);
+  ctx.gw.push('12;1;1;0;2;0');
+  await until(ctx.clock, () => !ctx.app.overridden.has('12:1'), 'report of off', { step: 1 });
   assert.ok(ctx.app.overridden.has('13:1'));
   await ctx.clock.advance(601_000);
   await ctx.app.updateStatus();
@@ -574,4 +584,162 @@ test('r2 I1: a proof followed within seconds by an answer nobody asked for is wi
   ctx.gw.push('0;255;3;0;2;2.3.2');
   await until(ctx.clock, () => ctx.app.unaskedAt !== undefined, 'unasked', { step: 1 });
   assert.equal(ctx.app.stops.get('12:1').sends, 0);
+});
+
+// --- Review r3 ---------------------------------------------------------------
+
+test('r3 I1: an on of Gladys that left after the last report makes the state before the off unknown: reports of on never lift it', async (t) => {
+  for (const [node, kind, value, reports] of [
+    [12, 'relay', 1, ['12;1;1;0;2;1']],
+    [13, 'brightness', 60, ['13;1;1;0;2;1', '13;1;1;0;3;60']],
+  ]) {
+    const ctx = await setup(t);
+    await live(ctx);
+    const key = `${node}:1`;
+    // Last report: off; then turned on from Gladys (echoed; the sketch never reports back).
+    ctx.gw.push(`${node};1;1;0;2;0`);
+    await until(ctx.clock, () => ctx.app.nodes.get(node)?.values.has('1:2'), 'reported off');
+    assert.equal(await answer(ctx, command(ctx, F(node, 1, kind), value)), 'confirmed');
+    await ctx.clock.advance(5000);
+    // The off is lost on the radio; the node reports itself on every 3 s.
+    ctx.gw.deaf.add(node);
+    assert.equal(await answer(ctx, command(ctx, F(node, 1, kind), 0)), 'unconfirmed');
+    assert.equal(ctx.app.stops.get(key).departure, undefined, 'unknown: the on may have applied');
+    for (let i = 0; i < 4; i += 1) {
+      for (const line of reports) ctx.gw.push(line);
+      await ctx.clock.advance(3000);
+      await settle(5);
+    }
+    assert.equal(ctx.app.nodes.get(node).values.get('1:2').payload, '1', 'the reports were read');
+    assert.ok(ctx.app.stops.has(key), 'not lifted');
+    assert.equal(ctx.app.overridden.size, 0);
+    // The radio is back: the next send is echoed, the node ends off.
+    const before = offs(ctx.gw, node);
+    ctx.gw.deaf.delete(node);
+    await until(ctx.clock, () => !ctx.app.stops.has(key), 'confirmed', { step: 500, max: 90_000 });
+    assert.ok(offs(ctx.gw, node) > before, 'sent again over the reports of on');
+  }
+});
+
+test('r3 I1: a report that may have crossed the on (or a late echo) is not the state before; a later report is', async (t) => {
+  for (const [after, departure, lifted] of [
+    // The periodic report of off, sent before the on reached the node, comes right after it.
+    ['crossed', undefined, false],
+    // An echo of the on comes 5 s late: an echo is never a report.
+    ['late echo', undefined, false],
+    // Turned off at the node 10 s after the on: known off again.
+    ['later', '0', true],
+  ]) {
+    const ctx = await setup(t, { gateway: { echo: after !== 'late echo' } });
+    await live(ctx);
+    ctx.gw.push('12;1;1;0;2;0');
+    await until(ctx.clock, () => ctx.app.nodes.get(12)?.values.has('1:2'), 'reported off');
+    if (after === 'crossed') {
+      ctx.gw.onReceive = (m) => {
+        if (m.type === 1 && m.node === 12 && m.payload === '1') ctx.gw.push('12;1;1;0;2;0');
+      };
+    }
+    await answer(ctx, command(ctx, F(12, 1, 'relay'), 1));
+    ctx.gw.onReceive = undefined;
+    if (after === 'late echo') {
+      await ctx.clock.advance(5000);
+      ctx.gw.push('12;1;1;1;2;1');
+    }
+    if (after === 'later') {
+      await ctx.clock.advance(10_000);
+      ctx.gw.push('12;1;1;0;2;0');
+    }
+    if (after === 'later') {
+      await until(ctx.clock, () => !ctx.app.onAt.has('12:1'), 'later report');
+    }
+    await ctx.clock.advance(500);
+    await settle(10);
+    assert.equal(ctx.app.nodes.get(12).values.get('1:2').payload, '0', after);
+    // The off is lost on the radio; the node reports itself on, twice.
+    ctx.gw.deaf.add(12);
+    await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+    assert.equal(ctx.app.stops.get('12:1').departure, departure, after);
+    for (let i = 0; i < 2; i += 1) {
+      ctx.gw.push('12;1;1;0;2;1');
+      await ctx.clock.advance(1000);
+      await settle(5);
+    }
+    assert.equal(!ctx.app.stops.has('12:1'), lifted, after);
+  }
+});
+
+test('r3 I1: state unknown before the off: a report of off confirms it; an on made at the node afterwards is kept', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'unconfirmed');
+  assert.equal(ctx.app.stops.get('12:1').departure, undefined);
+  ctx.gw.push('12;1;1;0;2;1');
+  ctx.gw.push('12;1;1;0;2;1');
+  await ctx.clock.advance(1000);
+  await settle(5);
+  assert.ok(ctx.app.stops.has('12:1'), 'reports of on lift nothing from an unknown state');
+  ctx.gw.push('12;1;1;0;2;0');
+  await until(ctx.clock, () => !ctx.app.stops.has('12:1'), 'off read: confirmed', { step: 1 });
+  const sent = offs(ctx.gw);
+  ctx.gw.push('12;1;1;0;2;1');
+  ctx.gw.push('12;1;1;0;2;1');
+  await ctx.clock.advance(120_000);
+  assert.equal(offs(ctx.gw), sent, 'the on made at the node is never turned off again');
+});
+
+test('r3 M4: the status says an off is written and waits for a proof, never "not read" while connected', async (t) => {
+  const ctx = await setup(t, { gateway: { echo: false } });
+  await live(ctx);
+  // The gateway answers nothing: written, waiting for its answer or the echo.
+  ctx.gw.silent = true;
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+  await ctx.app.updateStatus();
+  assert.match(
+    status(ctx.gladys),
+    /Off written to the gateway, not counted as read until it answers or the node echoes it .*12:1/,
+  );
+  assert.doesNotMatch(status(ctx.gladys), /not read by the gateway/);
+  // Answers nobody asked for: only the echo counts, the status says so.
+  for (let i = 0; i < 20; i += 1) {
+    ctx.gw.push('0;255;3;0;2;2.3.2');
+    await ctx.clock.advance(3000);
+  }
+  await ctx.app.updateStatus();
+  assert.equal(ctx.app.stops.get('12:1').sends, 0);
+  assert.match(
+    status(ctx.gladys),
+    /Off written to the gateway, not counted as read until the node echoes it .*12:1/,
+  );
+  assert.doesNotMatch(status(ctx.gladys), /not read by the gateway/);
+  // The link closed: kept, not read.
+  ctx.gw.drop();
+  await until(
+    ctx.clock,
+    () => /Off kept, not read by the gateway yet/.test(status(ctx.gladys)),
+    'kept',
+    {
+      step: 1,
+    },
+  );
+});
+
+test('r3 M5: an echo is never kept as the state of the target (state before an off, device created)', async (t) => {
+  const ctx = await setup(t);
+  await live(ctx);
+  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 1)), 'confirmed');
+  assert.equal(ctx.app.nodes.get(12).values.size, 0, 'the echo is not a report');
+  // A device created afterwards gets no state from the echo.
+  await ctx.gladys.fake.deviceCreated(ctx.gladys.devices[0]);
+  await ctx.clock.advance(3000);
+  await settle(5);
+  assert.deepEqual(statesOf(ctx.gladys, F(12, 1, 'relay')), []);
+  // An off then echoed is not "known off" for the next click.
+  await ctx.clock.advance(5000);
+  ctx.gw.push('12;1;1;0;2;1');
+  await until(ctx.clock, () => ctx.app.nodes.get(12).values.has('1:2'), 'reported on');
+  assert.equal(await answer(ctx, command(ctx, F(12, 1, 'relay'), 0)), 'confirmed');
+  assert.equal(ctx.app.nodes.get(12).values.get('1:2').payload, '1');
+  ctx.gw.deaf.add(12);
+  await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
+  assert.equal(ctx.app.stops.get('12:1').departure, '1');
 });

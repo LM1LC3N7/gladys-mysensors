@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { F, answer, command, live, settle, setup, status, statesOf, until } from './helpers/app.js';
 import { credentialsMark, memoryStore } from '../src/store.js';
-import { PacketGuard } from '../src/mqtt.js';
+import { PacketGuard, openMqtt as realOpenMqtt } from '../src/mqtt.js';
 
 const SECRET = 'S3cret-Passw0rd';
 
@@ -219,4 +219,137 @@ test('MQTT: a reconnection to Gladys during a refusal does not try again', async
   await ctx.app.connected();
   await ctx.clock.advance(60_000);
   assert.equal(ctx.gw.connects.length, before);
+});
+
+/** r3 M3: /data whose first read answers only on `release()`, past its 2 s bound. */
+function lateStore(data) {
+  const store = memoryStore(data);
+  const load = store.load.bind(store);
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let reads = 0;
+  store.load = () => {
+    reads += 1;
+    return reads === 1 ? gate.then(load) : load();
+  };
+  return { store, release };
+}
+
+const refusedBefore = (password) => {
+  const SALT = '0'.repeat(32);
+  return {
+    format: 1,
+    auth: {
+      failures: 1,
+      until: Date.UTC(2026, 0, 1) + 15 * 60_000,
+      mark: credentialsMark(SALT, 'gladys', password),
+      salt: SALT,
+    },
+  };
+};
+
+test('r3 M3: /data read late after a restart never puts its refusal back over a connection accepted meanwhile', async (t) => {
+  // The same pair (the broker fixed meanwhile) and a new password.
+  for (const password of [SECRET, 'new-pw']) {
+    const { store, release } = lateStore(refusedBefore(SECRET));
+    const ctx = await setup(t, {
+      mqtt: true,
+      store,
+      connect: false,
+      config: { mqtt_username: 'gladys', mqtt_password: password },
+    });
+    const connecting = ctx.gladys.connect();
+    await until(ctx.clock, () => ctx.app.memoryState === 'unreadable', '/data late');
+    await connecting;
+    await live(ctx);
+    assert.equal(ctx.gw.connects.length, 1);
+    release();
+    await until(ctx.clock, () => ctx.app.memoryState === 'ok', '/data read', { step: 100 });
+    await ctx.app.updateStatus();
+    assert.match(status(ctx.gladys), /MySensors gateway 2\.3\.2 connected/);
+    assert.equal(ctx.app.authStopped, false);
+    assert.equal(ctx.app.memory.auth.failures, 0, 'the accepted connection wins');
+    await until(ctx.clock, () => store.data?.auth?.failures === 0, 'the file says so too');
+    // The link drops: tried again within the waits of the link, never after 15 min.
+    ctx.gw.drop();
+    await until(ctx.clock, () => ctx.gw.connects.length === 2, 'tried again', {
+      step: 100,
+      max: 10_000,
+    });
+  }
+});
+
+test('r3 M3: /data read late: the rule of a restart when it comes, unless this process settled the refusal first', async (t) => {
+  for (const [password, before, wait, failures] of [
+    // Nothing settled before /data: another pair starts over, the same pair goes on.
+    ['new-pw', undefined, /next try in 15 min/, 1],
+    [SECRET, undefined, /next try in 60 min/, 2],
+    // The configuration saved by the user before /data: the count starts over.
+    [SECRET, 'saved', /next try in 15 min/, 1],
+    // Refused before /data: that refusal stays (no try before its wait).
+    ['new-pw', 'refused', /next try in 15 min/, 1],
+  ]) {
+    const { store, release } = lateStore(refusedBefore(SECRET));
+    // The first attempt opens only when the test says so.
+    let open;
+    const opening = new Promise((resolve) => {
+      open = resolve;
+    });
+    const openMqtt = async (cfg, handlers) => {
+      await opening;
+      return realOpenMqtt(cfg, handlers);
+    };
+    const ctx = await setup(t, {
+      mqtt: true,
+      store,
+      connect: false,
+      app: { openMqtt },
+      config: { mqtt_username: 'gladys', mqtt_password: password },
+      gateway: { connack: () => ({ reasonCode: 135 }) },
+    });
+    const connecting = ctx.gladys.connect();
+    await until(ctx.clock, () => ctx.app.memoryState === 'unreadable', '/data late');
+    await connecting;
+    const refused = () => /refused the connection/.test(status(ctx.gladys));
+    if (before === 'saved') await ctx.gladys.fake.configUpdated({ ...ctx.config });
+    if (before === 'refused') {
+      open();
+      await until(ctx.clock, refused, 'refused before /data');
+    }
+    release();
+    await until(ctx.clock, () => ctx.app.memoryState === 'ok', '/data read', { step: 100 });
+    open();
+    await until(ctx.clock, refused, 'refused');
+    assert.match(status(ctx.gladys), wait);
+    assert.equal(ctx.app.memory.auth.failures, failures);
+    await ctx.clock.advance(10 * 60_000);
+    assert.equal(ctx.gw.connects.length, 1, 'one try, then the wait');
+  }
+});
+
+test('r3 M3: a configuration read again on a reconnection to Gladys with another password is tried at once, even during a refusal', async (t) => {
+  const ctx = await setup(t, {
+    mqtt: true,
+    config: { mqtt_username: 'gladys', mqtt_password: SECRET },
+    gateway: {
+      connack: (packet) =>
+        String(packet.password) === 'good' ? { reasonCode: 0 } : { reasonCode: 135 },
+    },
+  });
+  await until(ctx.clock, () => /refused the connection/.test(status(ctx.gladys)), 'refused');
+  const before = ctx.gw.connects.length;
+  // The same pair read again: no try (the wait of the refusal goes on).
+  await ctx.app.connected();
+  await ctx.clock.advance(60_000);
+  assert.equal(ctx.gw.connects.length, before);
+  // Saved while the integration was away from Gladys (no event): read on the reconnection.
+  ctx.gladys.fake.config.mqtt_password = 'good';
+  await ctx.app.connected();
+  await until(ctx.clock, () => ctx.gw.connects.length === before + 1, 'tried at once', {
+    max: 5000,
+  });
+  await live(ctx);
+  assert.equal(ctx.app.memory.auth.failures, 0);
 });

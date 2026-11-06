@@ -160,6 +160,16 @@ export const T = {
       `Off kept, not read by the gateway yet (sent as soon as it is connected): ${list}`,
       `Arrêt gardé, pas encore lu par la passerelle (part dès qu’elle est connectée) : ${list}`,
     ),
+  stopsWritten: (list, echoOnly) =>
+    echoOnly
+      ? both(
+          `Off written to the gateway, not counted as read until the node echoes it (written again meanwhile): ${list}`,
+          `Arrêt écrit à la passerelle, compté comme lu seulement à l’écho du nœud (réécrit en attendant) : ${list}`,
+        )
+      : both(
+          `Off written to the gateway, not counted as read until it answers or the node echoes it (written again meanwhile): ${list}`,
+          `Arrêt écrit à la passerelle, compté comme lu seulement à sa réponse ou à l’écho du nœud (réécrit en attendant) : ${list}`,
+        ),
   stopsUnconfirmed: (list) =>
     both(
       `Off sent, not confirmed by the node yet (sent again): ${list}`,

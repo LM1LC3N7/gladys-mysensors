@@ -22,6 +22,15 @@ anyone on your network can talk to the gateway. Use it on a trusted network
 only. The MQTT password is kept by Gladys in its database, never shown again,
 sent only to your broker.
 
+The protocol has no request id either: an answer of the gateway cannot be
+tied to the request of Gladys that asked for it. A device on your network
+(or a client of your broker) that forges the answer of the gateway right
+after each request of Gladys, while the real gateway is away, can make a
+turn-off count as read by the gateway: after 5 such answers it is reported
+as abandoned in the status although the gateway never read it. Answers
+that come when nobody asked are detected (see Turning off); such an
+attacker could as well send commands to your nodes himself.
+
 ## Setup
 
 1. Choose the kind of gateway.
@@ -102,19 +111,27 @@ It is kept on disk until the node confirms it (echo, or a report of off after
 the send), and sent again after a restart, even before the configuration is
 read (Ethernet gateway, or MQTT broker without credentials). It is lifted
 without being sent again when a newer command of the same target actually
-left, or when the node, last reported off before the click, reports itself
-on twice after the off left (someone turned it on again at the node: a
-single report may have crossed the off, and the on/off + level pair of a
-dimmer is one report); the status then says so until the next report of the
-target (10 minutes at most). When the node was on, or its state unknown,
-before the click, a report of on is not a change made elsewhere: the off is
-sent again, then abandoned.
+left, or when the node, known off before the click, reports itself on twice
+after the off left (someone turned it on again at the node: a single report
+may have crossed the off, and the on/off + level pair of a dimmer is one
+report); the status then says so until the node reports itself off, a new
+click on it, or 10 minutes. Known off means: its last report before the
+click said off and, if Gladys turned it on (or set a brightness), a report
+came more than 3.5 s after that turn-on (a sooner one may have crossed it).
+When the node was on before the click, or its state unknown (never
+reported, or a turn-on of Gladys not followed by such a report: it may have
+been applied), a report of on is not a change made elsewhere: the off
+is sent again until the node echoes it or reports itself off (it is then
+confirmed, and a turn-on made at the node afterwards is kept), else it is
+abandoned after 5 sends read by the gateway.
 
 It cannot leave while the gateway (or the broker) is unreachable, while the
 broker refuses the credentials, or while the configuration is not valid: it
 is then kept and leaves first as soon as the gateway is back, new
 credentials are saved or the test button succeeds. Its fate is shown in the
-status: kept (not read by the gateway yet), sent and not confirmed yet,
+status: kept (not written yet: the gateway is not connected), written and
+not counted as read yet (until the gateway answers or, while answers nobody
+asked for come, until the node echoes it), sent and not confirmed yet,
 abandoned, or turned on again at the node.
 
 ## Node ids
