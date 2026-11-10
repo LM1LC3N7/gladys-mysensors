@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-10
+
 ### Added
 
 - First version: the nodes of a MySensors network heard through an Ethernet
@@ -30,3 +32,6 @@ the notes of the version's GitHub Release.
   messages never taken for values.
 - Refused MQTT credentials: next tries spaced (15 min to 24 h), across
   restarts; new credentials or the test button try at once.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-mysensors/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-mysensors/releases/tag/v0.1.1

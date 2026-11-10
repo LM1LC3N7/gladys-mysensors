@@ -1,6 +1,6 @@
 {
   "name": "gladys-mysensors",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for MySensors home-made sensor networks: the nodes, sensors, relays and dimmers heard through an Ethernet (TCP) or MQTT gateway. Unofficial, not affiliated with the MySensors project.",
   "type": "module",
