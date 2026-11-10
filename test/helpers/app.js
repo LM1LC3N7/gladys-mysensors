@@ -2,6 +2,12 @@
 // The app against the SDK's fake Gladys, a fake gateway on a real local
 // socket, a virtual clock and a /data in memory. Every wait is bounded: a test
 // fails, never hangs, even under a mutant.
+//
+// Two kinds of waits, never mixed: a network exchange (a connection, a
+// CONNECT, an echo, a value pushed by the gateway) is awaited in real time
+// with the virtual clock frozen (`net`, `live`, `answer(..., { real })`), so
+// that no virtual timeout of the app runs while real bytes are on their way;
+// `until` advances the virtual clock, for what the timers of the app do.
 // -----------------------------------------------------------------------------
 
 import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
@@ -9,8 +15,8 @@ import { MySensorsApp } from '../../src/app.js';
 import { registerHandlers } from '../../src/handlers.js';
 import { buildNode } from '../../src/model.js';
 import { memoryStore } from '../../src/store.js';
-import { fakeBroker, fakeTcpGateway } from './fakeGateway.js';
-import { settle, testClock } from './clock.js';
+import { fakeBroker, fakeTcpGateway, networkIdle } from './fakeGateway.js';
+import { settle, testClock, waitFor } from './clock.js';
 
 export const SELECTOR = 'mysensors';
 export const quiet = { info() {}, warn() {}, error() {}, debug() {} };
@@ -49,6 +55,8 @@ export const defaultDevices = () => [
  */
 export async function setup(t, options = {}) {
   const clock = options.clock ?? testClock();
+  // The virtual clock never moves while a delayed message is on its way to a fake.
+  clock.idle ??= networkIdle;
   const gw =
     options.gw ??
     (options.mqtt ? await fakeBroker(options.gateway) : await fakeTcpGateway(options.gateway));
@@ -84,6 +92,19 @@ export async function setup(t, options = {}) {
   return { app, gladys, gw, clock, store, config };
 }
 
+/** Real-time bound of a network exchange (generous: a loaded CI runner). */
+export const NET = 15_000;
+
+/** Waits in real time, the virtual clock frozen, for a network event (bounded). */
+export const net = (condition, what, ms = NET) => waitFor(condition, what, ms);
+
+/** Advances the virtual clock to the next connection attempt the app planned (its waits). */
+export async function toNextAttempt(ctx) {
+  const at = ctx.app.nextAttemptAt;
+  if (at === undefined) throw new Error('no connection attempt planned');
+  await ctx.clock.advance(Math.max(0, at - ctx.clock.elapsed) + 1);
+}
+
 /** Advances the virtual clock until `condition()` (real I/O runs in between), bounded. */
 export async function until(clock, condition, what, { step = 10, max = 30_000 } = {}) {
   for (let spent = 0; spent <= max; spent += step) {
@@ -95,8 +116,12 @@ export async function until(clock, condition, what, { step = 10, max = 30_000 } 
   throw new Error(`timed out waiting for ${what}`);
 }
 
-/** The answer of a click, the virtual clock run until it comes (bounded). */
-export async function answer(ctx, promise, { step = 5, max = 30_000 } = {}) {
+/**
+ * The answer of a click, the virtual clock run until it comes (bounded); with
+ * `real` (ms), an answer that comes from the network (an echo, the gateway
+ * answering the test button) awaited in real time, the virtual clock frozen.
+ */
+export async function answer(ctx, promise, { step = 5, max = 30_000, real = 0 } = {}) {
   const box = { done: false };
   const settled = promise.then(
     (value) => {
@@ -110,17 +135,14 @@ export async function answer(ctx, promise, { step = 5, max = 30_000 } = {}) {
   );
   // Handled now: a refusal is awaited by the caller, never an unhandled rejection meanwhile.
   settled.catch(() => {});
-  await until(ctx.clock, () => box.done, 'answer', { step, max });
+  if (real > 0) await waitFor(() => box.done, 'answer', real);
+  else await until(ctx.clock, () => box.done, 'answer', { step, max });
   return settled;
 }
 
-/** Waits until the gateway answered on the link (connected). */
-export async function live(ctx) {
-  await until(
-    ctx.clock,
-    () => ctx.app.live && ctx.app.link && !ctx.app.link.closed,
-    'live gateway',
-  );
+/** Waits (real time, virtual clock frozen) until the gateway answered on the link (connected). */
+export async function live(ctx, ms = NET) {
+  await waitFor(() => ctx.app.live && ctx.app.link && !ctx.app.link.closed, 'live gateway', ms);
   await settle(5);
 }
 

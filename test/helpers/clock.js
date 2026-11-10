@@ -35,7 +35,12 @@ export function testClock({ start = Date.UTC(2026, 0, 1), step = 0.001 } = {}) {
     return h;
   };
   const remove = (h) => pending.delete(h);
-  return {
+  const clock = {
+    /**
+     * Optional: true when no network message is on its way (set by the test
+     * setup); `advance` never moves the time while it is false (bounded).
+     */
+    idle: undefined,
     now: () => start + read(),
     monotonic: () => read(),
     get elapsed() {
@@ -53,6 +58,11 @@ export function testClock({ start = Date.UTC(2026, 0, 1), step = 0.001 } = {}) {
     async advance(ms) {
       const target = t + ms;
       for (let guard = 0; guard < 100_000; guard += 1) {
+        // Time never moves while a message is on its way (it would race the network).
+        if (clock.idle) {
+          await waitFor(clock.idle, 'the network to be idle', 15_000);
+          await settle(2);
+        }
         let next;
         for (const [h, timer] of pending) {
           if (
@@ -74,6 +84,7 @@ export function testClock({ start = Date.UTC(2026, 0, 1), step = 0.001 } = {}) {
       await settle(1);
     },
   };
+  return clock;
 }
 
 /** Waits (real time, bounded) for `condition()`; throws with `what` past `ms`. */

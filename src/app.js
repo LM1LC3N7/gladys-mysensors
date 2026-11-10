@@ -124,6 +124,9 @@ export class CommandError extends Error {
 
 const isMeasurement = (kind) => KINDS[kind]?.feature.type === 'decimal';
 
+/** The credentials of a configuration, exactly (kept in memory only, never in /data). */
+const pairOf = (config) => JSON.stringify([config.transport, config.username, config.password]);
+
 export class MySensorsApp {
   constructor({
     gladys,
@@ -166,6 +169,8 @@ export class MySensorsApp {
     // Link.
     this.link = undefined;
     this.linkKey = undefined;
+    /** The session key of the configuration applied last (see doApplyConfig). */
+    this.appliedKey = undefined;
     this.linkTarget = undefined;
     this.linking = undefined;
     this.linkGen = 0;
@@ -179,6 +184,8 @@ export class MySensorsApp {
     this.authTimer = undefined;
     /** The refusal kept in /data was settled by this process (see loadMemory). */
     this.authSettled = false;
+    /** The pair this process saw refused, exactly (memory only; /data keeps a 6-bit mark). */
+    this.refusedPair = undefined;
     this.keepaliveTimer = undefined;
     this.resetSession();
     /** node id -> what was heard of it (presentations, values, battery). */
@@ -323,7 +330,12 @@ export class MySensorsApp {
       this.saveLater();
     }
     const key = next.problem ? undefined : sessionKey(next);
-    if (key !== this.linkKey || !previous) {
+    const applied = this.appliedKey;
+    this.appliedKey = key;
+    // Read again unchanged (a reconnection to Gladys): the link, opened or
+    // not, keeps its reason and its waits. Saved by the user, or another
+    // gateway: started again (an open link to the same gateway is kept).
+    if (fromUser || !previous || key !== applied) {
       await this.restartLink(key);
     }
     this.scheduleDevices(0);
@@ -693,6 +705,7 @@ export class MySensorsApp {
   async onRefused(cfg, reason) {
     this.logger.warn(`MQTT broker refused the connection: ${reason}`);
     this.authSettled = true;
+    this.refusedPair = pairOf(cfg);
     const failures = this.memory.auth.failures + 1;
     const wait = authWait(failures);
     const salt = this.memory.auth.salt ?? randomBytes(16).toString('hex');
@@ -732,11 +745,15 @@ export class MySensorsApp {
    * restart, one try at once in any case.
    */
   refusedPairCheck(config) {
+    // Refused in this process: compared exactly (the 6-bit mark of /data
+    // takes 1 pair in 64 for the refused one); else the mark of /data.
     const same =
-      config.transport === TRANSPORTS.MQTT &&
-      this.memory.auth.salt &&
-      this.memory.auth.mark ===
-        credentialsMark(this.memory.auth.salt, config.username, config.password);
+      this.refusedPair !== undefined
+        ? this.refusedPair === pairOf(config)
+        : config.transport === TRANSPORTS.MQTT &&
+          this.memory.auth.salt &&
+          this.memory.auth.mark ===
+            credentialsMark(this.memory.auth.salt, config.username, config.password);
     if (!same) this.liftAuth();
   }
 

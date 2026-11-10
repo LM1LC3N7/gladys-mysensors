@@ -23,6 +23,7 @@ npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run audit                             # npm audit --omit=dev
 npm run mutants                           # scripts/mutants.mjs, one at a time
+FAKE_GATEWAY_DELAY=300 FAKE_BROKER_DELAY=700 npm test   # a slow network: must pass too
 node scripts/cover.mjs cover.png          # regenerate the cover
 npx github:GladysAssistant/integration-store .   # store admission checks
 ```
@@ -63,3 +64,8 @@ scripts/mutants.mjs  the mutants the tests must kill
   `## [Unreleased]`.
 - **Texts** are bilingual (English and French), UTF-8 without BOM
   (`test/encoding.test.js`). Tests never touch the network beyond 127.0.0.1.
+- **Tests and time**: never advance the virtual clock while a network
+  exchange is on its way: wait for it in real time (`net`, `live`,
+  `answer(..., { real })` of `test/helpers/app.js`), then advance the clock
+  for the timers of the app. The suite must pass with
+  `FAKE_GATEWAY_DELAY=300 FAKE_BROKER_DELAY=700`.

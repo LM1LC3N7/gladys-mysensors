@@ -107,7 +107,16 @@ sockets.
   attempt to another gateway opens the new link as soon as the stale attempt
   ends (whatever its outcome); an attempt to the same gateway is kept. A
   click (stop) during an attempt that fails tries once more at once, then the
-  waits resume.
+  waits resume. A configuration read again unchanged (a reconnection to
+  Gladys) leaves the link as it is, opened or not: its reason (a refusal of
+  the broker, an unreachable gateway) and its waits are kept (review r4 M1);
+  saved by the user, or another gateway, it is started again.
+- **Tests and time**: a virtual clock for every wait of the app; every
+  network exchange of a test is awaited in real time with that clock frozen,
+  and the clock never moves while a delayed message is on its way to a fake
+  (review r4 I1: no race between a virtual timeout and a real answer). The
+  suite passes with `FAKE_GATEWAY_DELAY=300 FAKE_BROKER_DELAY=700`, and 50
+  times under Node 22 with a CPU load.
 - **Presented type**: kept in memory only; after a restart the declaration is
   the guard until the node presents itself again (review r1, M3, documented).
 - **I_DISCOVER** when the gateway says it is ready: once a minute at most
@@ -144,7 +153,10 @@ sockets.
   wait), else starts over; no wait is ever armed from the file alone. A
   configuration read again on a reconnection to Gladys with another pair
   than the refused one is tried at once; the same pair keeps its wait (no
-  try). /data read late at start (past its 2 s bound): what this process
+  try). The pair refused by this process is compared exactly (kept in memory
+  only); the 6-bit mark of /data takes 1 pair in 64 for the refused one, so
+  it only decides whether the count of refusals goes on after a restart,
+  where one try is made anyway (review r4 I1, a test flaky 1 time in 64). /data read late at start (past its 2 s bound): what this process
   settled meanwhile (a connection accepted, a refusal, new credentials, the
   test button) wins over the refusal of the file, which is then written
   over; nothing settled yet, the file is compared with the configuration

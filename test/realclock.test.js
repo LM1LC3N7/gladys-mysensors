@@ -19,7 +19,9 @@ import { F, SELECTOR, defaultDevices, quiet } from './helpers/app.js';
 const SPEED = 20;
 
 test('real clock: the gateway asked every minute; stop resends at 1.5 s, 5 s, 20 s; nothing after stop', async (t) => {
-  const gw = await fakeTcpGateway({ echo: false });
+  // An injected network delay (FAKE_GATEWAY_DELAY, simulated ms) runs SPEED times faster too.
+  const delay = (Number(process.env.FAKE_GATEWAY_DELAY) || 0) / SPEED;
+  const gw = await fakeTcpGateway({ echo: false, delay });
   const clock = realClock({ speed: SPEED });
   const gladys = createFakeGladys({
     selector: SELECTOR,

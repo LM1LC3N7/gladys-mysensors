@@ -9,6 +9,13 @@
 // sent with the ack flag (as the radio layer of a node does) when `echo` is
 // on. `received` keeps every message the integration sent; `push(line)`
 // sends a message of a node; counters of connections (open, peak).
+//
+// Latency check: FAKE_GATEWAY_DELAY / FAKE_BROKER_DELAY (ms), or the `delay`
+// option, delay what each fake reads from the integration (in order), as a
+// slow network or a loaded runner would; the suite must pass with them: its
+// network waits are in real time (helpers/app.js) and the virtual clock never
+// moves while a delayed message is on its way (`networkIdle`). Example:
+//   FAKE_GATEWAY_DELAY=300 FAKE_BROKER_DELAY=700 node --test test/*.test.js
 // -----------------------------------------------------------------------------
 
 import net from 'node:net';
@@ -16,6 +23,26 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const mqttPacket = require('mqtt-packet');
+
+const delayOf = (name) => Math.max(0, Number(process.env[name] ?? 0) || 0);
+
+/** Messages of the integration delayed on their way to a fake (every fake of the process). */
+const inflight = { count: 0 };
+
+/** True when no delayed message is on its way (the virtual clock may move). */
+export const networkIdle = () => inflight.count === 0;
+
+/** Runs `fn(data)` now, or `ms` later (each chunk in order, counted while on its way). */
+function later(ms, fn) {
+  if (!(ms > 0)) return fn;
+  return (data) => {
+    inflight.count += 1;
+    setTimeout(() => {
+      inflight.count -= 1;
+      fn(data);
+    }, ms);
+  };
+}
 
 export const parse = (line) => {
   const parts = line.split(';');
@@ -84,15 +111,19 @@ export async function fakeTcpGateway(options = {}) {
       return;
     }
     let buffer = '';
-    socket.on('data', (data) => {
-      buffer += data.toString('latin1');
-      let at;
-      while ((at = buffer.indexOf('\n')) >= 0) {
-        const text = buffer.slice(0, at);
-        buffer = buffer.slice(at + 1);
-        for (const answer of brain(gw, parse(text))) socket.write(`${line(answer)}\n`);
-      }
-    });
+    socket.on(
+      'data',
+      later(gw.delay ?? delayOf('FAKE_GATEWAY_DELAY'), (data) => {
+        if (socket.destroyed) return;
+        buffer += data.toString('latin1');
+        let at;
+        while ((at = buffer.indexOf('\n')) >= 0) {
+          const text = buffer.slice(0, at);
+          buffer = buffer.slice(at + 1);
+          for (const answer of brain(gw, parse(text))) socket.write(`${line(answer)}\n`);
+        }
+      }),
+    );
     gw.onConnect?.(socket);
   });
   await new Promise((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
@@ -188,7 +219,12 @@ export async function fakeBroker(options = {}) {
         for (const answer of brain(gw, { node, child, type, ack, sub, payload })) gw.push(answer);
       }
     });
-    socket.on('data', (data) => parser.parse(data));
+    socket.on(
+      'data',
+      later(gw.delay ?? delayOf('FAKE_BROKER_DELAY'), (data) => {
+        if (!socket.destroyed) parser.parse(data);
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   gw.port = server.address().port;

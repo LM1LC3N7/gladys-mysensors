@@ -445,6 +445,32 @@ export const MUTANTS = [
     'if (msg.ack === 0 && (info.values.has(key) || info.values.size < LIMITS.childrenPerNode * 4)) {',
     'if (info.values.has(key) || info.values.size < LIMITS.childrenPerNode * 4) {',
   ],
+  // Review r4.
+  [
+    'r4 M1 a configuration read again keeps a link never opened',
+    'src/app.js',
+    'if (fromUser || !previous || key !== applied) {',
+    'if (fromUser || !previous || key !== this.linkKey) {',
+  ],
+  [
+    'r4 M1 saved by the user: started again',
+    'src/app.js',
+    'if (fromUser || !previous || key !== applied) {',
+    'if (!previous || key !== applied) {',
+  ],
+  [
+    'r4 M1 the first configuration applied',
+    'src/app.js',
+    'if (fromUser || !previous || key !== applied) {',
+    'if (fromUser || key !== applied) {',
+  ],
+  [
+    'r4 I1 the pair refused here compared exactly',
+    'src/app.js',
+    '      this.refusedPair !== undefined\n',
+    '      false\n',
+  ],
+  ['r4 I1 the pair refused here kept', 'src/app.js', '    this.refusedPair = pairOf(cfg);\n', ''],
   // Configuration.
   [
     'password without user',

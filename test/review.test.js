@@ -1,12 +1,24 @@
 // -----------------------------------------------------------------------------
-// The points of reviews r1 to r3: each correction has its test (a mutant of it
+// The points of reviews r1 to r4: each correction has its test (a mutant of it
 // fails here, never hangs).
 // -----------------------------------------------------------------------------
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { F, answer, command, live, settle, setup, statesOf, status, until } from './helpers/app.js';
+import {
+  F,
+  answer,
+  command,
+  live,
+  net,
+  settle,
+  setup,
+  statesOf,
+  status,
+  toNextAttempt,
+  until,
+} from './helpers/app.js';
 import { fakeTcpGateway } from './helpers/fakeGateway.js';
 import { testClock } from './helpers/clock.js';
 import { memoryStore } from '../src/store.js';
@@ -742,4 +754,51 @@ test('r3 M5: an echo is never kept as the state of the target (state before an o
   ctx.gw.deaf.add(12);
   await answer(ctx, command(ctx, F(12, 1, 'relay'), 0));
   assert.equal(ctx.app.stops.get('12:1').departure, '1');
+});
+
+// --- Review r4 ---------------------------------------------------------------
+
+test('r4 M1: a configuration read again unchanged (a reconnection to Gladys) keeps the reason and the waits of a link never opened', async (t) => {
+  const gw = await fakeTcpGateway();
+  // Nothing listens any more: every attempt is refused.
+  await gw.close();
+  let attempts = 0;
+  const openTcp = (route, handlers) => {
+    attempts += 1;
+    return realOpenTcp(route, handlers);
+  };
+  const ctx = await setup(t, { gw, app: { openTcp } });
+  // Three refusals: the wait grows (1 s, 2 s, then 5 s).
+  for (let n = 1; n <= 3; n += 1) {
+    await net(() => ctx.app.failures === n && ctx.app.nextAttemptAt !== undefined, `failure ${n}`);
+    if (n < 3) await toNextAttempt(ctx);
+  }
+  const { failures, nextAttemptAt } = ctx.app;
+  await ctx.app.updateStatus();
+  assert.match(status(ctx.gladys), /unreachable \(ECONNREFUSED\); next try in 5 s/);
+  const tries = attempts;
+  // Gladys reconnects: the configuration is read again, unchanged.
+  await ctx.app.connected();
+  await settle(10);
+  assert.equal(attempts, tries, 'no attempt sooner than the wait');
+  assert.equal(ctx.app.failures, failures);
+  assert.equal(ctx.app.nextAttemptAt, nextAttemptAt);
+  assert.match(status(ctx.gladys), /unreachable \(ECONNREFUSED\); next try in 5 s/);
+  // Saved by the user: tried at once.
+  await ctx.gladys.fake.configUpdated({ ...ctx.config });
+  await net(() => attempts === tries + 1, 'tried at once');
+});
+
+test('r4 M1: an invalid configuration read at start closes the link opened from /data', async (t) => {
+  const gw = await fakeTcpGateway();
+  const store = memoryStore({
+    format: 1,
+    route: { transport: 'tcp', host: '127.0.0.1', port: gw.port },
+    stops: [{ node: 12, child: 1, sends: 0 }],
+  });
+  const ctx = await setup(t, { gw, store, config: { gateway_address: '' } });
+  await net(() => gw.connections >= 1 && gw.open === 0 && !ctx.app.link, 'closed');
+  assert.match(status(ctx.gladys), /Type the address of the Ethernet gateway/);
+  await ctx.clock.advance(60_000);
+  assert.equal(gw.open, 0);
 });
